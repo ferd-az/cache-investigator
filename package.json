@@ -16,10 +16,13 @@
     "build": "vite build",
     "deploy": "npm run build && wrangler deploy",
     "simulator:validate": "node --experimental-strip-types --test simulator/generator.test.ts",
+    "telemetry:seed:local": "node --experimental-strip-types simulator/seed-d1.ts --local",
+    "telemetry:validate": "node --experimental-strip-types --test src/telemetry/tools.integration.test.ts",
     "types": "wrangler types env.d.ts",
     "format": "oxfmt --write .",
     "lint": "oxlint src/ simulator/",
-    "check": "oxfmt --check . && npm run lint && tsc && npm run simulator:validate"
+    "check:fast": "oxfmt --check . && npm run lint && tsc && npm run simulator:validate",
+    "check": "npm run check:fast && npm run telemetry:validate"
   },
   "dependencies": {
     "agents": "^0.17.4",
@@ -34,6 +37,7 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "miniflare": "5.20260826.0-alpha",
     "oxfmt": "^0.56.0",
     "oxlint": "^1.71.0",
     "typescript": "^6.0.3",

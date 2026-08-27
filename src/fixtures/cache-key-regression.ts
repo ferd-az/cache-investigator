@@ -204,7 +204,8 @@ const finding: FinalFinding = {
           to: "2026-08-26T14:25:00.000Z",
           service: "catalog-edge",
           route: "/products",
-          query: "cache_status=MISS session_id:*",
+          cacheStatus: "MISS",
+          hasSessionId: true,
           limit: 100
         }
       },
@@ -522,7 +523,8 @@ export const completedCacheKeyRegression: Investigation = {
         to: "2026-08-26T14:25:00.000Z",
         service: "catalog-edge",
         route: "/products",
-        query: "cache_status=MISS session_id:*",
+        cacheStatus: "MISS",
+        hasSessionId: true,
         limit: 100
       }
     },

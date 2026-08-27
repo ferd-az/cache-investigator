@@ -53,7 +53,8 @@ export type SearchLogsInput = {
   service?: string;
   route?: string;
   status?: number;
-  query?: string;
+  hasSessionId?: boolean;
+  cacheStatus?: "HIT" | "MISS";
   cursor?: string;
   limit?: number;
 };
