@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   AnthropicInvestigationModel,
+  buildAnthropicModelRequest,
   buildAnthropicModelMessages,
   investigationMaxOutputTokens,
   investigationModel
@@ -66,9 +67,38 @@ test("Anthropic request uses Sonnet 5 without unsupported sampling or thinking f
   const tools = body.tools as Array<Record<string, unknown>>;
   assert.ok(tools.every((tool) => "input_schema" in tool));
   assert.ok(tools.every((tool) => !("parameters" in tool)));
+  assert.deepEqual(body.tool_choice, {
+    type: "auto",
+    disable_parallel_tool_use: true
+  });
+  assert.match(String(body.system), /bot or other transient traffic/i);
+  assert.match(String(body.system), /filters\.traffic_source/i);
+  assert.match(String(body.system), /remaining tool calls is 0/i);
+
+  const finalOnlyRequest = buildAnthropicModelRequest({
+    ...modelContext(),
+    remainingToolCalls: 0
+  });
+  assert.deepEqual(finalOnlyRequest.tool_choice, { type: "none" });
 });
 
-test("Anthropic history replays adjacent tool_use and tool_result blocks with stable call IDs", () => {
+test("Anthropic request binds the platform fetch receiver", async () => {
+  const receiverAwareFetch = async function (this: unknown) {
+    assert.equal(this, globalThis);
+    return jsonResponse({
+      stop_reason: "tool_use",
+      content: [toolUse("toolu_bound_fetch", "query_metrics")]
+    });
+  } as unknown as typeof fetch;
+
+  const model = new AnthropicInvestigationModel(
+    "placeholder",
+    receiverAwareFetch
+  );
+  await model.next(modelContext());
+});
+
+test("Anthropic history uses valid provider IDs while preserving persisted call IDs", () => {
   const messages = buildAnthropicModelMessages(
     modelContext([
       {
@@ -102,7 +132,7 @@ test("Anthropic history replays adjacent tool_use and tool_result blocks with st
   );
   assert.deepEqual(messages[1].content[0], {
     type: "tool_use",
-    id: "call:1:query_metrics",
+    id: "call_1_query_metrics",
     name: "query_metrics",
     input: {
       metrics: ["request_count"],
@@ -111,10 +141,14 @@ test("Anthropic history replays adjacent tool_use and tool_result blocks with st
     }
   });
   assert.equal(messages[2].content[0].type, "tool_result");
-  assert.equal(messages[2].content[0].tool_use_id, "call:1:query_metrics");
+  assert.equal(messages[2].content[0].tool_use_id, "call_1_query_metrics");
   assert.equal(messages[2].content[0].is_error, undefined);
+  assert.equal(
+    JSON.parse(String(messages[2].content[0].content)).callId,
+    "call:1:query_metrics"
+  );
   assert.equal(messages[4].content[0].is_error, true);
-  assert.equal(messages[4].content[0].tool_use_id, "call:2:search_logs");
+  assert.equal(messages[4].content[0].tool_use_id, "call_2_search_logs");
 });
 
 test("Anthropic adapter parses a final JSON text block and omits nested null optionals", async () => {

@@ -80,6 +80,8 @@ const toolSchemas = [
         interval: { type: "string", enum: ["1m", "5m", "15m"] },
         filters: {
           type: "object",
+          description:
+            "Optional exact-match filters. Supported keys include service, environment, route, region, deployment, traffic_source, cache_status, response_status, and has_session_id. traffic_source may be user or bot.",
           additionalProperties: { type: "string" }
         },
         groupBy: {
@@ -181,7 +183,7 @@ export class AnthropicInvestigationModel implements InvestigationModel {
 
   constructor(apiKey: string, fetcher: typeof fetch = fetch) {
     this.apiKey = apiKey;
-    this.fetcher = fetcher;
+    this.fetcher = fetcher.bind(globalThis);
   }
 
   async next(
@@ -239,6 +241,10 @@ export function buildAnthropicModelRequest(context: InvestigationModelContext) {
     max_tokens: investigationMaxOutputTokens,
     system: systemPrompt(context),
     tools: toolSchemas,
+    tool_choice:
+      context.remainingToolCalls === 0
+        ? { type: "none" }
+        : { type: "auto", disable_parallel_tool_use: true },
     messages: buildAnthropicModelMessages(context)
   };
 }
@@ -339,12 +345,13 @@ export function buildAnthropicModelMessages(
   ];
   for (const entry of context.history) {
     const projected = projectToolResultForModel(entry);
+    const toolUseId = entry.callId.replace(/[^a-zA-Z0-9_-]/g, "_");
     messages.push({
       role: "assistant",
       content: [
         {
           type: "tool_use",
-          id: entry.callId,
+          id: toolUseId,
           name: entry.call.tool,
           input: entry.call.input
         }
@@ -355,7 +362,7 @@ export function buildAnthropicModelMessages(
       content: [
         {
           type: "tool_result",
-          tool_use_id: entry.callId,
+          tool_use_id: toolUseId,
           content: JSON.stringify(projected),
           ...(entry.error !== undefined ? { is_error: true } : {})
         }
@@ -467,6 +474,12 @@ function systemPrompt(context: InvestigationModelContext) {
   const missingEvidenceTools = requiredEvidenceTools.filter(
     (tool) => !completedTools.has(tool)
   );
+  const botTrafficChecked = context.history.some(
+    (entry) =>
+      entry.call.tool === "query_metrics" &&
+      entry.call.input.filters?.traffic_source === "bot" &&
+      entry.result !== undefined
+  );
   return `You are a production cache-regression investigator. Work only from the supplied scope and results returned by the four server tools. Never assume a cause, invent telemetry, or request data outside the scope.
 
 Scope:
@@ -478,8 +491,9 @@ Scope:
 - remaining tool calls: ${context.remainingToolCalls}
 - completed evidence tools: ${[...completedTools].join(", ") || "none"}
 - missing required evidence tools: ${missingEvidenceTools.join(", ") || "none"}
+- bot traffic timing check: ${botTrafficChecked ? "complete" : "pending"}
 
-Choose at most one tool per turn. Start with aggregate metrics, localize affected routes and request segments, correlate timing with deployments, inspect structured logs, and check dependencies or transient traffic as alternative explanations. You must successfully call all four evidence tools before returning a final finding; if the missing required evidence tools list is non-empty, call one of those tools next instead of finalizing. Keep queries narrow enough to remain under server limits. For search_logs, set an explicit limit of 10 or fewer first and paginate only if needed. Omit optional tool fields when unused; do not send null. Encode integer fields such as limit and status as JSON numbers, not strings. Tool errors are evidence about invalid inputs; correct them on a later turn. Historical tool payloads may include a projection marker; omitted rows remain persisted, so narrow or paginate rather than assuming they do not exist.
+Choose at most one tool per turn. Start with aggregate metrics, localize affected routes and request segments, correlate timing with deployments, inspect structured logs, and check dependencies or transient traffic as alternative explanations. Explicitly assess whether bot or other transient traffic overlaps the regression onset, and carry that timing conclusion into alternativesRuledOut. Use no more than one dedicated query_metrics call for that check, with filters.traffic_source set to "bot", and compare its last elevated bucket to the regression onset. If the bot traffic timing check is complete, do not run another bot-filtered query. You must successfully call all four evidence tools before returning a final finding; if the missing required evidence tools list is non-empty, call one of those tools next instead of finalizing. If remaining tool calls is 0, return a final or no_findings response instead of calling another tool. Keep queries narrow enough to remain under server limits. For search_logs, set an explicit limit of 10 or fewer first and paginate only if needed. Omit optional tool fields when unused; do not send null. Encode integer fields such as limit and status as JSON numbers, not strings. Tool errors are evidence about invalid inputs; correct them on a later turn. Historical tool payloads may include a projection marker; omitted rows remain persisted, so narrow or paginate rather than assuming they do not exist.
 
 When the evidence is sufficient, return JSON only with this envelope: {"kind":"final","finding":FINAL_FINDING}. Use this exact FINAL_FINDING shape:
 {"headline":"...","status":"confirmed|likely|inconclusive","summary":"...","impact":{"startedAt":"ISO timestamp","summary":"...","affectedRoutes":["..."],"indicators":[{"label":"...","value":0,"unit":"optional"}]},"rootCause":{"summary":"...","change":"...","mechanism":["..."]},"confidence":{"level":"high|medium|low","score":0.0,"rationale":"..."},"recommendation":{"immediate":"...","verify":"...","followUps":["..."]},"evidence":[{"id":"exact evidenceId","kind":"metric|log|deployment|dependency","title":"...","claim":"...","source":{"callId":"exact callId"},"observedAt":"optional ISO timestamp","window":{"from":"ISO timestamp","to":"ISO timestamp"},"values":[{"label":"...","value":0,"unit":"optional"}]}],"alternativesRuledOut":[{"hypothesis":"...","reason":"...","evidenceIds":["exact evidenceId"]}]}.
