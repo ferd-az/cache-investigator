@@ -141,3 +141,7 @@ dist
 # Cloudflare
 .wrangler
 .dev.vars
+
+# Local planning notes — never commit
+CLAUDE.md
+

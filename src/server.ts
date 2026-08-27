@@ -1,12 +1,11 @@
 import { Agent, routeAgentRequest } from "agents";
+import type { InvestigationAgentState } from "./investigation/contracts";
 
-export type InvestigationState = {
-  status: "idle";
-};
+export type InvestigationState = InvestigationAgentState;
 
 export class InvestigationAgent extends Agent<Env, InvestigationState> {
   initialState: InvestigationState = {
-    status: "idle"
+    activeInvestigation: null
   };
 }
 

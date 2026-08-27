@@ -15,10 +15,11 @@
     "start": "vite dev",
     "build": "vite build",
     "deploy": "npm run build && wrangler deploy",
+    "simulator:validate": "node --experimental-strip-types --test simulator/generator.test.ts",
     "types": "wrangler types env.d.ts",
     "format": "oxfmt --write .",
-    "lint": "oxlint src/",
-    "check": "oxfmt --check . && oxlint src/ && tsc"
+    "lint": "oxlint src/ simulator/",
+    "check": "oxfmt --check . && npm run lint && tsc && npm run simulator:validate"
   },
   "dependencies": {
     "agents": "^0.17.4",
