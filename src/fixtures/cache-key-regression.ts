@@ -302,6 +302,9 @@ export const completedCacheKeyRegression: Investigation = {
     kind: "manual",
     label: "Investigate the production catalog regression"
   },
+  configuration: {
+    chaos: "none"
+  },
   scope: {
     service: "catalog-edge",
     environment: "production",

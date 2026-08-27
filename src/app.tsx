@@ -10,7 +10,7 @@ export default function App() {
   return (
     <main>
       <h1>Cache Investigator</h1>
-      <p>Agent status: {agent.state?.activeInvestigation?.status ?? "idle"}</p>
+      <p>Agent status: {agent.state?.investigation?.status ?? "idle"}</p>
     </main>
   );
 }

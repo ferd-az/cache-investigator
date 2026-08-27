@@ -7,7 +7,15 @@
   "assets": {
     "directory": "./public",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/agents/*"]
+    "run_worker_first": ["/agents/*", "/api/*"]
+  },
+  "secrets": {
+    "required": ["ANTHROPIC_API_KEY"]
+  },
+  "vars": {
+    // Override explicitly in a local/demo invocation to exercise persisted
+    // chaos modes. The production-safe default rejects every chaos request.
+    "INVESTIGATION_CHAOS": "disabled"
   },
   "d1_databases": [
     {

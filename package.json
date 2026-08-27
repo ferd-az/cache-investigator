@@ -18,11 +18,13 @@
     "simulator:validate": "node --experimental-strip-types --test simulator/generator.test.ts",
     "telemetry:seed:local": "node --experimental-strip-types simulator/seed-d1.ts --local",
     "telemetry:validate": "node --experimental-strip-types --test src/telemetry/tools.integration.test.ts",
+    "model:validate": "node --experimental-strip-types --test src/investigation/anthropic-model.test.ts",
+    "investigation:validate": "node --experimental-strip-types --test src/investigation/runtime.integration.test.ts",
     "types": "wrangler types env.d.ts",
     "format": "oxfmt --write .",
     "lint": "oxlint src/ simulator/",
-    "check:fast": "oxfmt --check . && npm run lint && tsc && npm run simulator:validate",
-    "check": "npm run check:fast && npm run telemetry:validate"
+    "check:fast": "oxfmt --check . && npm run lint && tsc && npm run simulator:validate && npm run model:validate",
+    "check": "npm run check:fast && npm run telemetry:validate && npm run investigation:validate"
   },
   "dependencies": {
     "agents": "^0.17.4",

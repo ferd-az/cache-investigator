@@ -29,6 +29,12 @@ export type InvestigationTrigger = {
   label: string;
 };
 
+export type InvestigationChaosMode = "none" | "step6" | "slow";
+
+export type InvestigationConfiguration = {
+  chaos: InvestigationChaosMode;
+};
+
 export type MetricName =
   | "request_count"
   | "cache_hit_rate"
@@ -147,6 +153,9 @@ type ToolCompletedEvent = {
   rowCount?: number;
   nextCursor?: string;
   evidenceIds?: string[];
+  // Runtime completions persist the complete bounded result. Optional only so
+  // historical static fixtures created before persisted receipts remain valid.
+  result?: unknown;
 };
 
 type ToolFailedEvent = {
@@ -154,6 +163,14 @@ type ToolFailedEvent = {
   callId: string;
   message: string;
   durationMs: number;
+  attempt: number;
+  retryable: boolean;
+};
+
+type ModelFailedEvent = {
+  type: "model.failed";
+  turn: number;
+  message: string;
   attempt: number;
   retryable: boolean;
 };
@@ -200,6 +217,7 @@ export type InvestigationEvent = EventEnvelope &
     | ToolProgressEvent
     | ToolCompletedEvent
     | ToolFailedEvent
+    | ModelFailedEvent
     | ObservationAddedEvent
     | HypothesisUpdatedEvent
     | InvestigationCompletedEvent
@@ -269,6 +287,7 @@ export type Investigation = {
   status: InvestigationStatus;
   trigger: InvestigationTrigger;
   scope: InvestigationScope;
+  configuration: InvestigationConfiguration;
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
@@ -278,5 +297,5 @@ export type Investigation = {
 };
 
 export type InvestigationAgentState = {
-  activeInvestigation: Investigation | null;
+  investigation: Investigation | null;
 };
