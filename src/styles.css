@@ -1,19 +1,119 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
 :root {
-  font-family: system-ui, sans-serif;
-  color: #171717;
-  background: #ffffff;
+  --background: #ffffff;
+  --foreground: #242428;
+  --card: #ffffff;
+  --card-foreground: #242428;
+  --popover: #ffffff;
+  --popover-foreground: #242428;
+  --primary: #5e6ad2;
+  --primary-foreground: #ffffff;
+  --secondary: #f2f2f4;
+  --secondary-foreground: #35353a;
+  --muted: #f5f5f6;
+  --muted-foreground: #72727a;
+  --accent: #eeeeff;
+  --accent-foreground: #4f56a6;
+  --destructive: #c84136;
+  --border: #e6e6e8;
+  --input: #dedee2;
+  --ring: #6974d9;
+  --chart-1: #5e6ad2;
+  --chart-2: #2f9e78;
+  --chart-3: #d88428;
+  --chart-4: #c84136;
+  --chart-5: #8b5cc7;
+  --sidebar: #f7f7f8;
+  --sidebar-foreground: #242428;
+  --sidebar-primary: #5e6ad2;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ececef;
+  --sidebar-accent-foreground: #29292e;
+  --sidebar-border: #e6e6e8;
+  --sidebar-ring: #6974d9;
+  --radius: 0.45rem;
+  font-family: "Geist Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  color: var(--foreground);
+  background: var(--background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+@theme inline {
+  --font-heading: "Geist Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Geist Variable", Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "SFMono-Regular", Consolas, monospace;
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --radius-sm: calc(var(--radius) * 0.65);
+  --radius-md: calc(var(--radius) * 0.85);
+  --radius-lg: var(--radius);
 }
 
 * {
   box-sizing: border-box;
+  border-color: var(--border);
 }
 
-body {
+html,
+body,
+#root {
+  min-width: 320px;
+  min-height: 100%;
   margin: 0;
 }
 
-main {
-  max-width: 48rem;
-  margin: 0 auto;
-  padding: 4rem 1.5rem;
+body {
+  background: var(--background);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+code,
+time,
+dd {
+  font-variant-numeric: tabular-nums;
+}
+
+code,
+pre {
+  font-family: "Geist Mono Variable", "SFMono-Regular", Consolas, monospace;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
