@@ -57,10 +57,17 @@ test("models the bot burst as a recovered decoy", () => {
 });
 
 test("derives the fixture's cache-to-origin causal chain", () => {
-  const baseline = aggregateRequests(requests, baselineWindow);
-  const service = aggregateRequests(requests, incidentWindow);
+  const baselineProducts = aggregateRequests(requests, {
+    ...baselineWindow,
+    route: "/products"
+  });
   const products = aggregateRequests(requests, {
     ...incidentWindow,
+    route: "/products"
+  });
+  const productsAfter = aggregateRequests(requests, {
+    from: "2026-08-26T14:20:00.000Z",
+    to: "2026-08-26T15:00:00.000Z",
     route: "/products"
   });
   const withSession = aggregateRequests(requests, {
@@ -75,14 +82,9 @@ test("derives the fixture's cache-to-origin causal chain", () => {
   });
 
   assertNear(
-    baseline.cacheHitRate,
-    fixtureNumber("ev-overview", "Hit rate before") / 100,
+    baselineProducts.cacheHitRate,
+    fixtureNumber("ev-overview", "GET /products hit rate before") / 100,
     0.01
-  );
-  assertNear(
-    service.cacheHitRate,
-    fixtureNumber("ev-overview", "Service hit rate after") / 100,
-    0.015
   );
   assertNear(
     products.cacheHitRate,
@@ -100,22 +102,27 @@ test("derives the fixture's cache-to-origin causal chain", () => {
     0.02
   );
   assertNear(
-    service.originRequestsPerMinute,
-    fixtureNumber("ev-overview", "Origin requests after"),
+    productsAfter.originRequestsPerMinute,
+    fixtureNumber("ev-overview", "GET /products origin requests after"),
     15
   );
   assertNear(
-    products.response429Rate,
-    fixtureNumber("ev-overview", "/products 429s after") / 100,
+    productsAfter.response429Rate,
+    fixtureNumber("ev-overview", "GET /products origin errors after") / 100,
     0.005
   );
   assertNear(
-    products.responseLatencyP99Ms,
-    fixtureNumber("ev-overview", "Response p99 after"),
+    productsAfter.responseLatencyP99Ms,
+    fixtureNumber("ev-overview", "GET /products response p99 after"),
     15
   );
   assertNear(
-    service.cacheKeyCardinality,
+    baselineProducts.cacheKeyCardinality,
+    fixtureNumber("ev-session-segment", "Keys per 5m before"),
+    0
+  );
+  assertNear(
+    products.cacheKeyCardinality,
     fixtureNumber("ev-session-segment", "Keys per 5m after"),
     50
   );

@@ -1,10 +1,82 @@
 import type {
   FinalFinding,
   Investigation,
-  InvestigationPlanStep
+  InvestigationPlanStep,
+  InvestigationToolCall,
+  MetricName
 } from "../investigation/contracts";
+import type { ListDeploymentsResult } from "../telemetry/tools";
+import {
+  deploymentMarkers,
+  productsSignalCall,
+  productsSignalSeries
+} from "./telemetry-series.ts";
 
 const investigationId = "inv_cache_20260826_001";
+const investigationWindow = {
+  from: "2026-08-26T14:00:00.000Z",
+  to: "2026-08-26T15:00:00.000Z"
+};
+const deployedAt = deploymentMarkers[0].at;
+const incidentStartedAt = "2026-08-26T14:20:00.000Z";
+const overviewCall = {
+  tool: productsSignalCall.tool,
+  input: {
+    ...productsSignalCall.input,
+    metrics: [...productsSignalCall.input.metrics],
+    to: investigationWindow.to,
+    filters: { ...productsSignalCall.input.filters }
+  }
+} satisfies InvestigationToolCall;
+const overviewSeries = {
+  ...productsSignalSeries,
+  to: investigationWindow.to,
+  points: productsSignalSeries.points.filter(
+    (point) =>
+      point.bucketStart >= investigationWindow.from &&
+      point.bucketStart < investigationWindow.to
+  )
+};
+const deploymentResult: ListDeploymentsResult = {
+  deployments: deploymentMarkers.map((marker) => ({
+    id: `deployment:${marker.version}`,
+    service: "catalog-edge",
+    environment: "production",
+    version: marker.version,
+    commit: "8f31ad2",
+    deployedAt: marker.at,
+    changes: [
+      "Removed session_id from the ignored cache-key parameter list for /products"
+    ]
+  }))
+};
+const overviewValues = {
+  cacheHitBefore: Math.round(
+    metricMedian("cache_hit_rate", (at) => at < Date.parse(deployedAt))
+  ),
+  cacheHitAfter: Math.round(
+    metricMedian("cache_hit_rate", (at) => at >= Date.parse(incidentStartedAt))
+  ),
+  originRequestsAfter: Math.round(
+    metricMedian(
+      "origin_request_count",
+      (at) => at >= Date.parse(incidentStartedAt)
+    )
+  ),
+  originErrorRateAfter: roundTo(
+    metricMedian(
+      "origin_error_rate",
+      (at) => at >= Date.parse(incidentStartedAt)
+    ),
+    1
+  ),
+  responseP99After: Math.round(
+    metricMedian(
+      "response_latency_p99",
+      (at) => at >= Date.parse(incidentStartedAt)
+    )
+  )
+};
 
 const plan: InvestigationPlanStep[] = [
   {
@@ -34,16 +106,27 @@ const finding: FinalFinding = {
   headline: "A cache-key change is overloading the catalog origin",
   status: "confirmed",
   summary:
-    "catalog-edge-v42 began including session_id in /products cache keys. The resulting key explosion dropped cache hits, pushed request volume past origin capacity, and caused 429s and elevated latency.",
+    "catalog-edge-v42 began including session_id in /products cache keys. The resulting key explosion dropped cache hits, increased origin load, and caused 429s and elevated latency.",
   impact: {
-    startedAt: "2026-08-26T14:20:00.000Z",
-    summary:
-      "GET /products is returning 12.7% 429 responses with p99 latency at 1.81 seconds. Other catalog routes remain healthy.",
+    startedAt: incidentStartedAt,
+    summary: `GET /products is returning about ${overviewValues.originErrorRateAfter}% origin errors with p99 latency at ${(overviewValues.responseP99After / 1000).toFixed(2)} seconds. Other catalog routes remain healthy.`,
     affectedRoutes: ["GET /products"],
     indicators: [
-      { label: "Cache hit rate", value: 18, unit: "%" },
-      { label: "Origin 429 rate", value: 12.7, unit: "%" },
-      { label: "Response p99", value: 1810, unit: "ms" }
+      {
+        label: "GET /products cache hit rate",
+        value: overviewValues.cacheHitAfter,
+        unit: "%"
+      },
+      {
+        label: "GET /products origin error rate",
+        value: overviewValues.originErrorRateAfter,
+        unit: "%"
+      },
+      {
+        label: "GET /products response p99",
+        value: overviewValues.responseP99After,
+        unit: "ms"
+      }
     ]
   },
   rootCause: {
@@ -53,9 +136,9 @@ const finding: FinalFinding = {
       "catalog-edge-v42 (commit 8f31ad2) removed session_id from the cache-key normalization exclusion list.",
     mechanism: [
       "Session-bearing requests stopped sharing cached /products responses.",
-      "Five-minute cache-key cardinality rose from 124 to about 4,480.",
-      "/products cache hit rate fell from 92% to 18%, sending misses to the origin.",
-      "Origin traffic exceeded capacity and produced 429s and queueing latency."
+      "Five-minute /products cache-key cardinality rose from 40 to about 4,400, an approximately 110x increase.",
+      `/products cache hit rate fell from ${overviewValues.cacheHitBefore}% to ${overviewValues.cacheHitAfter}%, sending misses to the origin.`,
+      "Origin traffic surged and produced errors and queueing latency."
     ]
   },
   confidence: {
@@ -83,32 +166,39 @@ const finding: FinalFinding = {
       claim:
         "Cache hit rate, origin errors, and response latency change together two minutes after the deployment.",
       source: {
-        tool: "query_metrics",
-        callId: "call-overview",
-        input: {
-          metrics: [
-            "request_count",
-            "cache_hit_rate",
-            "origin_request_count",
-            "origin_error_rate",
-            "response_latency_p99"
-          ],
-          from: "2026-08-26T14:00:00.000Z",
-          to: "2026-08-26T15:00:00.000Z",
-          interval: "5m"
-        }
+        ...overviewCall,
+        callId: "call-overview"
       },
       window: {
         from: "2026-08-26T14:00:00.000Z",
         to: "2026-08-26T15:00:00.000Z"
       },
       values: [
-        { label: "Hit rate before", value: 92, unit: "%" },
-        { label: "Service hit rate after", value: 45.7, unit: "%" },
-        { label: "Origin requests after", value: 945, unit: "req/min" },
-        { label: "Route origin capacity", value: 750, unit: "req/min" },
-        { label: "/products 429s after", value: 12.7, unit: "%" },
-        { label: "Response p99 after", value: 1810, unit: "ms" }
+        {
+          label: "GET /products hit rate before",
+          value: overviewValues.cacheHitBefore,
+          unit: "%"
+        },
+        {
+          label: "GET /products hit rate after",
+          value: overviewValues.cacheHitAfter,
+          unit: "%"
+        },
+        {
+          label: "GET /products origin requests after",
+          value: overviewValues.originRequestsAfter,
+          unit: "req/min"
+        },
+        {
+          label: "GET /products origin errors after",
+          value: overviewValues.originErrorRateAfter,
+          unit: "%"
+        },
+        {
+          label: "GET /products response p99 after",
+          value: overviewValues.responseP99After,
+          unit: "ms"
+        }
       ]
     },
     {
@@ -172,7 +262,7 @@ const finding: FinalFinding = {
         callId: "call-session-segment",
         input: {
           metrics: ["cache_hit_rate", "cache_key_cardinality"],
-          from: "2026-08-26T14:20:00.000Z",
+          from: investigationWindow.from,
           to: "2026-08-26T14:40:00.000Z",
           interval: "5m",
           filters: { route: "/products" },
@@ -186,8 +276,8 @@ const finding: FinalFinding = {
       values: [
         { label: "With session_id", value: 3.8, unit: "% hit" },
         { label: "Without session_id", value: 90.7, unit: "% hit" },
-        { label: "Keys per 5m before", value: 124 },
-        { label: "Keys per 5m after", value: 4480 }
+        { label: "Keys per 5m before", value: 40 },
+        { label: "Keys per 5m after", value: 4392 }
       ]
     },
     {
@@ -252,20 +342,8 @@ const finding: FinalFinding = {
       claim:
         "Traffic spiked from 14:08–14:12, but hit rate and latency returned to baseline by 14:14.",
       source: {
-        tool: "query_metrics",
-        callId: "call-overview",
-        input: {
-          metrics: [
-            "request_count",
-            "cache_hit_rate",
-            "origin_request_count",
-            "origin_error_rate",
-            "response_latency_p99"
-          ],
-          from: "2026-08-26T14:00:00.000Z",
-          to: "2026-08-26T15:00:00.000Z",
-          interval: "5m"
-        }
+        ...overviewCall,
+        callId: "call-overview"
       },
       window: {
         from: "2026-08-26T14:00:00.000Z",
@@ -310,10 +388,7 @@ export const completedCacheKeyRegression: Investigation = {
     environment: "production",
     question:
       "Why did catalog latency and 429 responses increase after 14:00 UTC?",
-    window: {
-      from: "2026-08-26T14:00:00.000Z",
-      to: "2026-08-26T15:00:00.000Z"
-    }
+    window: investigationWindow
   },
   createdAt: "2026-08-26T14:49:00.000Z",
   startedAt: "2026-08-26T14:49:02.000Z",
@@ -346,21 +421,9 @@ export const completedCacheKeyRegression: Investigation = {
       sequence: 3,
       at: "2026-08-26T14:49:04.000Z",
       type: "tool.started",
+      ...overviewCall,
       callId: "call-overview",
-      tool: "query_metrics",
-      label: "Scanning service indicators for the first sustained change",
-      input: {
-        metrics: [
-          "request_count",
-          "cache_hit_rate",
-          "origin_request_count",
-          "origin_error_rate",
-          "response_latency_p99"
-        ],
-        from: "2026-08-26T14:00:00.000Z",
-        to: "2026-08-26T15:00:00.000Z",
-        interval: "5m"
-      }
+      label: "Scanning /products indicators for the first sustained change"
     },
     {
       id: "evt-004",
@@ -369,7 +432,7 @@ export const completedCacheKeyRegression: Investigation = {
       at: "2026-08-26T14:49:09.000Z",
       type: "tool.progress",
       callId: "call-overview",
-      message: "Aggregating 108,000 request records into five-minute buckets",
+      message: "Aggregating request records into one-minute buckets",
       elapsedMs: 5000
     },
     {
@@ -383,7 +446,8 @@ export const completedCacheKeyRegression: Investigation = {
         "Found a sustained change at 14:20: hit rate falls as origin errors and p99 latency rise.",
       durationMs: 8100,
       rowCount: 60,
-      evidenceIds: ["ev-overview", "ev-bot-recovery"]
+      evidenceIds: ["ev-overview", "ev-bot-recovery"],
+      result: overviewSeries
     },
     {
       id: "evt-006",
@@ -466,7 +530,8 @@ export const completedCacheKeyRegression: Investigation = {
         "catalog-edge-v42 deployed at 14:18 and changed cache-key normalization for /products.",
       durationMs: 2900,
       rowCount: 1,
-      evidenceIds: ["ev-deployment"]
+      evidenceIds: ["ev-deployment"],
+      result: deploymentResult
     },
     {
       id: "evt-012",
@@ -492,7 +557,7 @@ export const completedCacheKeyRegression: Investigation = {
       label: "Testing cache behavior with and without session_id",
       input: {
         metrics: ["cache_hit_rate", "cache_key_cardinality"],
-        from: "2026-08-26T14:20:00.000Z",
+        from: investigationWindow.from,
         to: "2026-08-26T14:40:00.000Z",
         interval: "5m",
         filters: { route: "/products" },
@@ -507,7 +572,7 @@ export const completedCacheKeyRegression: Investigation = {
       type: "tool.completed",
       callId: "call-session-segment",
       summary:
-        "Session-bearing requests have a 3.8% hit rate and drive a 36x increase in key cardinality.",
+        "Session-bearing requests have a 3.8% hit rate and drive an approximately 110x increase in five-minute /products key cardinality.",
       durationMs: 6100,
       rowCount: 16,
       evidenceIds: ["ev-session-segment"]
@@ -670,3 +735,25 @@ export const completedCacheKeyRegression: Investigation = {
   ],
   finding
 };
+
+function metricMedian(metric: MetricName, include: (at: number) => boolean) {
+  const values = overviewSeries.points.flatMap((point) => {
+    const value = point.values[metric];
+    return include(Date.parse(point.bucketStart)) && typeof value === "number"
+      ? [value]
+      : [];
+  });
+  if (values.length === 0) {
+    throw new Error(`Fixture series has no ${metric} values in the window`);
+  }
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2
+    ? sorted[middle]
+    : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function roundTo(value: number, decimals: number) {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
