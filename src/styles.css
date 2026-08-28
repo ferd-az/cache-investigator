@@ -117,3 +117,145 @@ pre {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
+
+.detail-title h1,
+.not-found h1 {
+  margin: 0;
+  color: #222227;
+  font-weight: 610;
+  letter-spacing: -0.025em;
+}
+
+.detail-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 244px;
+  width: min(100%, 1240px);
+  margin: 0 auto;
+  padding: 28px 32px 90px 48px;
+}
+
+.detail-main {
+  min-width: 0;
+  padding-right: 56px;
+}
+
+.not-found a {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 6px;
+  color: #73737b;
+  font-size: 12px;
+}
+
+.detail-title {
+  padding: 15px 0 34px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-state {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 12px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 570;
+}
+
+.attention-state {
+  color: #a94135;
+  background: #fff0ed;
+}
+
+.complete-state {
+  color: #28785f;
+  background: #eaf7f2;
+}
+
+.detail-title h1 {
+  max-width: 760px;
+  font-size: 25px;
+  line-height: 1.25;
+}
+
+.detail-title p {
+  max-width: 760px;
+  margin: 10px 0 0;
+  color: #686870;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.properties-rail {
+  min-height: calc(100vh - 104px);
+  padding: 62px 0 0 24px;
+  border-left: 1px solid var(--border);
+}
+
+.properties-rail h2 {
+  margin: 0 0 12px;
+  color: #6e6e76;
+  font-size: 11px;
+  font-weight: 570;
+}
+
+.properties-rail dl {
+  display: grid;
+  gap: 14px;
+  margin: 0;
+}
+
+.properties-rail dl > div {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.properties-rail dt,
+.properties-rail dd {
+  font-size: 11px;
+}
+
+.properties-rail dt {
+  color: #8a8a91;
+}
+
+.properties-rail dd {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #48484f;
+}
+
+.not-found {
+  display: grid;
+  width: min(100%, 680px);
+  margin: 0 auto;
+  padding: 80px 40px;
+}
+
+.not-found h1 {
+  font-size: 21px;
+}
+
+@media (max-width: 820px) {
+  .detail-page {
+    grid-template-columns: 1fr;
+    padding: 24px 24px 70px;
+  }
+
+  .detail-main {
+    padding-right: 0;
+  }
+
+  .properties-rail {
+    min-height: 0;
+    margin-top: 32px;
+    padding: 24px 0 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+}
