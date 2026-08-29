@@ -21,7 +21,8 @@
     {
       "binding": "TELEMETRY_DB",
       "database_name": "cache-investigator-telemetry",
-      "migrations_dir": "migrations"
+      "migrations_dir": "migrations",
+      "database_id": "de2dfbdd-79ba-4941-aab3-d8c999303be6"
     }
   ],
   "durable_objects": {
