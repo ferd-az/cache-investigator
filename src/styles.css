@@ -129,7 +129,6 @@ pre {
 .not-found h1 {
   margin: 0;
   color: #222227;
-  font-weight: 610;
   letter-spacing: -0.025em;
 }
 
@@ -152,7 +151,6 @@ pre {
   align-items: center;
   gap: 6px;
   color: #73737b;
-  font-size: 12px;
 }
 
 .detail-title {
@@ -168,8 +166,6 @@ pre {
   margin-bottom: 12px;
   padding: 0 7px;
   border-radius: 5px;
-  font-size: 10px;
-  font-weight: 570;
 }
 
 .attention-state {
@@ -184,7 +180,6 @@ pre {
 
 .detail-title h1 {
   max-width: 760px;
-  font-size: 25px;
   line-height: 1.25;
 }
 
@@ -192,7 +187,6 @@ pre {
   max-width: 760px;
   margin: 10px 0 0;
   color: #686870;
-  font-size: 13px;
   line-height: 1.6;
 }
 
@@ -205,8 +199,6 @@ pre {
 .properties-rail h2 {
   margin: 0 0 12px;
   color: #6e6e76;
-  font-size: 11px;
-  font-weight: 570;
 }
 
 .properties-rail dl {
@@ -220,11 +212,6 @@ pre {
   grid-template-columns: 74px 1fr;
   align-items: baseline;
   gap: 8px;
-}
-
-.properties-rail dt,
-.properties-rail dd {
-  font-size: 11px;
 }
 
 .properties-rail dt {
@@ -242,10 +229,6 @@ pre {
   width: min(100%, 680px);
   margin: 0 auto;
   padding: 80px 40px;
-}
-
-.not-found h1 {
-  font-size: 21px;
 }
 
 @media (max-width: 820px) {

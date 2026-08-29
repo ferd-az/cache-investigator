@@ -162,16 +162,16 @@ export function SignalStripChart({
       className="flex flex-col gap-4"
       aria-labelledby="signal-chart-title"
     >
-      <figcaption className="flex flex-col gap-2 px-2 sm:flex-row sm:items-baseline sm:justify-between">
-        <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
+      <figcaption className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           <span
-            className="font-mono text-xs font-medium text-[#74747c]"
+            className="text-sm font-medium text-[#2d2d33]"
             id="signal-chart-title"
           >
-            signals
+            Signals
           </span>
-          <span className="flex flex-wrap items-center gap-2 text-xs text-[#8e8e96]">
-            <span>{scopeLabel}</span>
+          <span className="flex flex-wrap items-center gap-2 text-sm text-[#7b7b83]">
+            <span className="font-mono">{scopeLabel}</span>
             <span className="inline-flex items-center gap-2">
               <MetadataSeparator />
               <span>{series.interval} buckets</span>
@@ -186,7 +186,7 @@ export function SignalStripChart({
           </span>
         </span>
         {model.bands.length ? (
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#85858d]">
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-[#74747c]">
             {model.bands.map((band) => (
               <span
                 className="inline-flex items-center gap-1.5"
@@ -300,7 +300,7 @@ function SharedInteractionLayer({
   return (
     <>
       <input
-        className="peer absolute inset-y-0 right-3 left-3 z-30 h-auto w-auto cursor-crosshair touch-pan-y appearance-none opacity-0 sm:right-[156px] sm:left-[164px]"
+        className="peer absolute inset-y-0 right-0 left-0 z-30 h-auto w-auto cursor-crosshair touch-pan-y appearance-none opacity-0 sm:right-[140px] sm:left-[148px]"
         type="range"
         min={0}
         max={Math.max(0, timestamps.length - 1)}
@@ -325,12 +325,12 @@ function SharedInteractionLayer({
         onPointerMove={onPointerMove}
       />
       <span
-        className="pointer-events-none absolute inset-y-0 right-3 left-3 z-20 hidden outline-2 outline-offset-2 outline-[#727783] peer-focus-visible:block sm:right-[156px] sm:left-[164px]"
+        className="pointer-events-none absolute inset-y-0 right-0 left-0 z-20 hidden outline-2 outline-offset-2 outline-[#727783] peer-focus-visible:block sm:right-[140px] sm:left-[148px]"
         aria-hidden="true"
       />
       {activeTimestamp !== null ? (
         <div
-          className="pointer-events-none absolute inset-y-0 right-3 left-3 z-40 sm:right-[156px] sm:left-[164px]"
+          className="pointer-events-none absolute inset-y-0 right-0 left-0 z-40 sm:right-[140px] sm:left-[148px]"
           aria-hidden="true"
         >
           <span
@@ -347,10 +347,10 @@ function SharedInteractionLayer({
             }}
           >
             <div className="flex items-baseline justify-between gap-3 pb-2">
-              <span className="font-mono text-[11px] font-medium text-[#33343a] tabular-nums">
+              <span className="font-mono text-xs font-medium text-[#33343a] tabular-nums">
                 {tooltipTime.format(activeTimestamp)} UTC
               </span>
-              <span className="text-[10px] text-[#96969e]">1m bucket</span>
+              <span className="text-xs text-[#8a8a92]">1m bucket</span>
             </div>
             <div className="flex flex-col gap-2 pt-2">
               {activeRows.map(({ row, datum }) => (
@@ -358,10 +358,8 @@ function SharedInteractionLayer({
                   className="flex items-baseline justify-between gap-4"
                   key={row.metric}
                 >
-                  <span className="text-[11px] text-[#777780]">
-                    {row.label}
-                  </span>
-                  <span className="font-mono text-xs font-medium text-[#29292f] tabular-nums">
+                  <span className="text-sm text-[#66666e]">{row.label}</span>
+                  <span className="font-mono text-sm font-medium text-[#29292f] tabular-nums">
                     {row.format(datum.value)}
                   </span>
                 </div>
@@ -385,7 +383,7 @@ function TimelineBandLayer({
 }) {
   return (
     <div
-      className="pointer-events-none absolute inset-y-0 right-3 left-3 z-0 sm:right-[156px] sm:left-[164px]"
+      className="pointer-events-none absolute inset-y-0 right-0 left-0 z-0 sm:right-[140px] sm:left-[148px]"
       aria-hidden="true"
     >
       {bands.map((band) => (
@@ -415,7 +413,7 @@ function TimelineRuleLayer({
 }) {
   return (
     <div
-      className="pointer-events-none absolute inset-y-0 right-3 left-3 z-20 sm:right-[156px] sm:left-[164px]"
+      className="pointer-events-none absolute inset-y-0 right-0 left-0 z-20 sm:right-[140px] sm:left-[148px]"
       aria-hidden="true"
     >
       {markers.map((marker) => (
@@ -424,7 +422,7 @@ function TimelineRuleLayer({
           style={{ left: `${toPercent(marker.at, fromMs, toMs)}%` }}
           key={`${marker.label}:${marker.at}`}
         >
-          <span className="absolute top-1 right-1.5 whitespace-nowrap font-mono text-[10px] font-medium text-[var(--accent-cobalt-ink)]">
+          <span className="absolute top-1 right-1.5 whitespace-nowrap font-mono text-xs font-medium text-[var(--accent-cobalt-ink)]">
             <span className="sm:hidden">
               deploy · {axisTime.format(marker.at)}
             </span>
@@ -440,7 +438,7 @@ function TimelineRuleLayer({
           className="absolute inset-y-0 border-l border-[var(--accent-vermilion)]"
           style={{ left: `${toPercent(onsetAt, fromMs, toMs)}%` }}
         >
-          <span className="absolute top-1 left-1.5 whitespace-nowrap font-mono text-[10px] font-medium text-[var(--accent-vermilion-ink)]">
+          <span className="absolute top-1 left-1.5 whitespace-nowrap font-mono text-xs font-medium text-[var(--accent-vermilion-ink)]">
             onset · {axisTime.format(onsetAt)}
           </span>
         </div>
@@ -465,12 +463,12 @@ function SignalChartRow({
     lastDatum?.after === undefined ? BEFORE_COLOR : AFTER_COLOR;
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 px-3 py-3 sm:grid-cols-[136px_minmax(0,1fr)_128px] sm:px-4">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 py-3 sm:grid-cols-[136px_minmax(0,1fr)_128px]">
       <span className="col-start-1 row-start-1 flex min-w-0 flex-col gap-0.5">
         <span className="truncate text-xs font-medium tracking-[-0.01em] text-[#4c4c54]">
           {row.label}
         </span>
-        <span className="truncate font-mono text-[10px] text-[#9999a1]">
+        <span className="truncate font-mono text-xs text-[#9999a1]">
           {row.unit}
         </span>
       </span>
@@ -535,13 +533,11 @@ function SignalChartRow({
       </ChartContainer>
 
       <span className="col-start-2 row-start-1 flex items-baseline justify-end gap-2 font-mono tabular-nums sm:col-start-3">
-        <span className="text-[11px] text-[#96969e]">
-          {row.format(row.before)}
-        </span>
-        <span className="text-[10px] text-[#c1c1c7]" aria-hidden="true">
+        <span className="text-xs text-[#96969e]">{row.format(row.before)}</span>
+        <span className="text-xs text-[#c1c1c7]" aria-hidden="true">
           →
         </span>
-        <span className="text-[13px] font-semibold tracking-[-0.01em] text-[var(--accent-vermilion-ink)]">
+        <span className="text-sm font-semibold tracking-[-0.01em] text-[var(--accent-vermilion-ink)]">
           {row.format(row.after)}
         </span>
       </span>
@@ -553,7 +549,7 @@ function SignalChartRow({
         >
           {axisTicks(fromMs, toMs).map((tick) => (
             <span
-              className="absolute top-0 -translate-x-1/2 font-mono text-[10px] text-[#a0a0a8] tabular-nums first:translate-x-0 last:-translate-x-full"
+              className="absolute top-0 -translate-x-1/2 font-mono text-xs text-[#a0a0a8] tabular-nums first:translate-x-0 last:-translate-x-full"
               style={{
                 left: `${((tick - fromMs) / (toMs - fromMs)) * 100}%`
               }}

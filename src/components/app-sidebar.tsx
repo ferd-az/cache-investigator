@@ -1,8 +1,9 @@
-import { Activity01Icon, Search01Icon } from "@hugeicons/core-free-icons";
+import { Search01Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
 
+import watchtowerLogo from "@/assets/watchtower.svg";
 import {
   Sidebar,
   SidebarContent,
@@ -26,15 +27,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               className="data-[slot=sidebar-menu-button]:p-1.5!"
               render={<Link to="/" aria-label="watchtower home" />}
             >
-              <span className="flex size-5 items-center justify-center rounded bg-primary text-primary-foreground">
-                <HugeiconsIcon
-                  icon={Activity01Icon}
-                  size={14}
-                  strokeWidth={1.7}
-                  aria-hidden="true"
-                />
-              </span>
-              <span className="text-[13px] font-semibold">watchtower</span>
+              <img
+                className="size-4 shrink-0"
+                src={watchtowerLogo}
+                alt=""
+                aria-hidden="true"
+              />
+              <span className="text-sm font-semibold">watchtower</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -46,7 +45,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  className="text-[13px]"
+                  className="text-sm"
                   isActive={
                     location.pathname === "/" ||
                     location.pathname.startsWith("/i/")
@@ -56,7 +55,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 >
                   <HugeiconsIcon
                     icon={Search01Icon}
-                    size={15}
+                    size={16}
                     strokeWidth={1.6}
                     aria-hidden="true"
                   />

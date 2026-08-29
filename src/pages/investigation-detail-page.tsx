@@ -4,12 +4,15 @@ import {
   ArrowRight01Icon,
   CheckmarkCircle01Icon,
   CheckmarkCircle02Icon,
+  Copy01Icon,
   SquareTerminalIcon
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { SignalStripChart } from "../components/signal-strip-chart";
+import { Button } from "../components/ui/button";
 import { MetadataSeparator } from "../components/ui/metadata-separator";
 import { completedCacheKeyRegression } from "../fixtures/cache-key-regression";
 import type {
@@ -37,6 +40,38 @@ const utcTime = new Intl.DateTimeFormat("en", {
   timeZone: "UTC"
 });
 
+const COPY_STATUS_RESET_DELAY = 1_600;
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through for browsers that expose but block the Clipboard API.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 export function InvestigationDetailPage() {
   const { id } = useParams();
 
@@ -50,8 +85,8 @@ export function InvestigationDetailPage() {
 
   return (
     <div className="not-found">
-      <h1>Investigation not found</h1>
-      <Link to="/">
+      <h1 className="text-xl font-medium">Investigation not found</h1>
+      <Link className="text-xs" to="/">
         <HugeiconsIcon
           icon={ArrowLeft01Icon}
           size={15}
@@ -69,7 +104,7 @@ function UnresolvedDetail() {
     <div className="detail-page">
       <section className="detail-main">
         <header className="detail-title">
-          <span className="detail-state attention-state">
+          <span className="detail-state attention-state text-xs font-medium">
             <HugeiconsIcon
               icon={AlertCircleIcon}
               size={15}
@@ -78,8 +113,10 @@ function UnresolvedDetail() {
             />{" "}
             Needs attention
           </span>
-          <h1>{unresolvedInvestigation.title}</h1>
-          <p>{unresolvedInvestigation.description}</p>
+          <h1 className="text-2xl font-medium">
+            {unresolvedInvestigation.title}
+          </h1>
+          <p className="text-sm">{unresolvedInvestigation.description}</p>
         </header>
       </section>
 
@@ -99,12 +136,17 @@ function UnresolvedDetail() {
 function CompletedDetail() {
   const investigation = completedCacheKeyRegression;
   const finding = investigation.finding!;
+  const recommendationTitle = "Restore cache-key normalization";
   const signalData = getInvestigationSignalData(investigation);
   const primaryEvidence = finding.evidence.slice(0, 5);
   const supportingEvidence = finding.evidence.slice(primaryEvidence.length);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState(
     primaryEvidence[0]?.id ?? finding.evidence[0]?.id
   );
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">(
+    "idle"
+  );
+  const reduceMotion = useReducedMotion();
   const evidenceNumbers = new Map(
     finding.evidence.map((evidence, index) => [evidence.id, index + 1])
   );
@@ -119,6 +161,64 @@ function CompletedDetail() {
       ? finding.impact.affectedRoutes[0]
       : undefined;
 
+  useEffect(() => {
+    if (copyStatus === "idle") return;
+
+    const timeout = window.setTimeout(
+      () => setCopyStatus("idle"),
+      COPY_STATUS_RESET_DELAY
+    );
+    return () => window.clearTimeout(timeout);
+  }, [copyStatus]);
+
+  async function copyRecommendation() {
+    const recommendation = [
+      recommendationTitle,
+      finding.recommendation.immediate,
+      "",
+      "Verify recovery",
+      finding.recommendation.verify
+    ].join("\n");
+
+    const copied = await copyTextToClipboard(recommendation);
+    setCopyStatus(copied ? "copied" : "error");
+  }
+
+  const showCopyStatus = copyStatus !== "idle";
+  const copyStatusVariants = {
+    initial: (showStatus: boolean) =>
+      showStatus && !reduceMotion
+        ? { opacity: 0, scale: 0.94, filter: "blur(4px)" }
+        : { opacity: 0, scale: 1, filter: "blur(0px)" },
+    animate: (showStatus: boolean) => ({
+      opacity: 1,
+      scale: 1,
+      filter: "blur(0px)",
+      transition: reduceMotion
+        ? { duration: 0 }
+        : {
+            duration: showStatus ? 0.18 : 0.12,
+            ease: "easeOut" as const
+          }
+    }),
+    exit: (showStatus: boolean) =>
+      showStatus && !reduceMotion
+        ? {
+            opacity: 0,
+            scale: 1.04,
+            filter: "blur(4px)",
+            transition: { duration: 0.14, ease: "easeOut" as const }
+          }
+        : {
+            opacity: 0,
+            scale: 1,
+            filter: "blur(0px)",
+            transition: reduceMotion
+              ? { duration: 0 }
+              : { duration: 0.1, ease: "easeOut" as const }
+          }
+  };
+
   return (
     <div className="mx-auto w-full max-w-[1280px] px-5 pt-5 pb-[68px] sm:px-7 sm:pt-6 sm:pb-[76px] xl:px-12 xl:pt-7 xl:pb-24">
       <article className="mx-auto flex w-full max-w-[1120px] flex-col gap-14 pt-4">
@@ -131,7 +231,7 @@ function CompletedDetail() {
               <div className="flex flex-col gap-6">
                 <div className="flex flex-col gap-5">
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-[7px] text-xs text-[#85858d] tabular-nums">
-                    <span className="inline-flex min-h-6 items-center gap-1 text-xs font-[570] text-[var(--accent-emerald)]">
+                    <span className="inline-flex min-h-6 items-center gap-1 text-xs font-medium text-[var(--accent-emerald)]">
                       <HugeiconsIcon
                         icon={CheckmarkCircle01Icon}
                         size={14}
@@ -168,7 +268,7 @@ function CompletedDetail() {
 
                 <div className="flex max-w-[720px] flex-col gap-2">
                   <SectionLabel>Triggering change</SectionLabel>
-                  <p className="text-base leading-[1.5] font-[560] tracking-[-0.01em] text-[#35353b]">
+                  <p className="text-base leading-[1.5] font-medium tracking-[-0.01em] text-[#35353b]">
                     {finding.rootCause.change}
                   </p>
                   <p className="text-sm leading-[1.6] text-[#686870]">
@@ -178,11 +278,10 @@ function CompletedDetail() {
               </div>
 
               <div className="flex flex-col gap-4" aria-label="Incident impact">
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#85858d]">
-                  <span className="font-mono font-medium">Impact</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-[#74747c]">
+                  <span className="font-medium text-[#2d2d33]">Impact</span>
                   {impactScope ? (
-                    <span className="inline-flex min-w-0 items-center gap-2">
-                      <MetadataSeparator />
+                    <span className="inline-flex min-w-0 items-center">
                       <span className="font-mono text-[#66666e] [overflow-wrap:anywhere]">
                         {keepHttpMethodWithRoute(impactScope)}
                       </span>
@@ -203,7 +302,7 @@ function CompletedDetail() {
                       <dt className="order-2 text-sm leading-[1.35] text-[#2d2d33] [overflow-wrap:anywhere]">
                         {impactMetricLabel(indicator.label, impactScope)}
                       </dt>
-                      <dd className="order-1 flex items-baseline gap-[3px] text-2xl leading-[1.15] font-[620] tracking-[-0.03em] text-[#2d2d33]">
+                      <dd className="order-1 flex items-baseline gap-[3px] text-2xl leading-[1.15] font-semibold tracking-[-0.03em] text-[#2d2d33]">
                         {indicator.value}
                         {indicator.unit ? (
                           <small className="text-xs font-medium tracking-normal text-[#74747c]">
@@ -218,30 +317,80 @@ function CompletedDetail() {
             </div>
 
             <aside
-              className="flex flex-col justify-between gap-8 rounded-2xl bg-[#edf1ff] p-5 sm:p-6"
+              className="flex flex-col justify-between gap-8 rounded-2xl bg-[#f7f7f8] p-5 sm:p-6"
               aria-labelledby="recommendation-title"
             >
               <div className="flex flex-col gap-2">
                 <header className="flex flex-col gap-[7px]">
-                  <SectionLabel className="text-[#6670b4]">
-                    Recommended action
-                  </SectionLabel>
+                  <SectionLabel>Recommended action</SectionLabel>
                   <h2
-                    className="text-lg font-[610] tracking-[-0.02em] text-[#292f63]"
+                    className="text-lg font-medium tracking-[-0.02em] text-[#29292f]"
                     id="recommendation-title"
                   >
-                    Restore cache-key normalization
+                    {recommendationTitle}
                   </h2>
                 </header>
-                <p className="text-sm leading-[1.6] text-[#4f5688]">
+                <p className="text-sm leading-[1.6] text-[#5f5f67]">
                   {finding.recommendation.immediate}
                 </p>
               </div>
-              <div className="grid gap-1.5 text-xs leading-[1.5] text-[#747aa0]">
-                <strong className="font-mono font-medium text-[#575e8d]">
-                  Recovery check
-                </strong>
-                <span>{finding.recommendation.verify}</span>
+              <div className="flex flex-col gap-5">
+                <div className="grid gap-1.5 text-sm leading-[1.55] text-[#707078]">
+                  <strong className="font-medium text-[#4d4d54]">
+                    Verify recovery
+                  </strong>
+                  <span>{finding.recommendation.verify}</span>
+                </div>
+                <footer className="flex justify-end">
+                  <Button
+                    className="w-48 overflow-hidden px-3"
+                    variant="outline"
+                    onClick={() => void copyRecommendation()}
+                    type="button"
+                  >
+                    <span className="sr-only" aria-live="polite">
+                      {copyStatus === "copied"
+                        ? "Recommendation copied"
+                        : copyStatus === "error"
+                          ? "Recommendation could not be copied"
+                          : "Copy recommendation"}
+                    </span>
+                    <AnimatePresence
+                      initial={false}
+                      mode="wait"
+                      custom={showCopyStatus}
+                    >
+                      <motion.span
+                        className="inline-flex items-center justify-center gap-1.5"
+                        key={copyStatus}
+                        aria-hidden="true"
+                        custom={showCopyStatus}
+                        variants={copyStatusVariants}
+                        initial="initial"
+                        animate="animate"
+                        exit="exit"
+                      >
+                        <HugeiconsIcon
+                          data-icon="inline-start"
+                          icon={
+                            copyStatus === "idle"
+                              ? Copy01Icon
+                              : copyStatus === "error"
+                                ? AlertCircleIcon
+                                : CheckmarkCircle02Icon
+                          }
+                          size={16}
+                          strokeWidth={1.6}
+                        />
+                        {copyStatus === "idle"
+                          ? "Copy recommendation"
+                          : copyStatus === "error"
+                            ? "Copy failed"
+                            : "Copied"}
+                      </motion.span>
+                    </AnimatePresence>
+                  </Button>
+                </footer>
               </div>
             </aside>
           </div>
@@ -267,12 +416,12 @@ function CompletedDetail() {
           <div className="flex max-w-[650px] flex-col gap-2">
             <SectionLabel>Evidence</SectionLabel>
             <h2
-              className="text-xl font-[610] tracking-[-0.025em] text-[#29292f]"
+              className="text-xl font-medium tracking-[-0.025em] text-[#29292f]"
               id="evidence-title"
             >
               Why this conclusion holds
             </h2>
-            <p className="max-w-[610px] text-xs leading-[1.55] text-[#797981]">
+            <p className="max-w-[610px] text-sm leading-[1.6] text-[#707078]">
               Five claims form the shortest supported path from symptom to
               cause. Open any receipt to inspect the underlying tool call.
             </p>
@@ -297,7 +446,7 @@ function CompletedDetail() {
 
               {supportingEvidence.length ? (
                 <div className="flex flex-col gap-2 pt-2">
-                  <span className="block px-4 font-mono text-xs text-[#8a8a91]">
+                  <span className="block px-4 text-sm font-medium text-[#74747c]">
                     Supporting receipts
                   </span>
                   <div>
@@ -342,7 +491,7 @@ function CompletedDetail() {
             <header className="flex flex-col gap-[7px]">
               <SectionLabel>Ruled out</SectionLabel>
               <h2
-                className="text-lg font-[610] tracking-[-0.02em] text-[#29292f]"
+                className="text-lg font-medium tracking-[-0.02em] text-[#29292f]"
                 id="alternatives-title"
               >
                 Plausible, but unsupported
@@ -366,7 +515,7 @@ function CompletedDetail() {
                       <strong className="text-sm font-medium text-[#404047]">
                         {alternative.hypothesis}
                       </strong>
-                      <p className="max-w-[650px] text-xs leading-[1.55] text-[#73737b]">
+                      <p className="max-w-[650px] text-sm leading-[1.55] text-[#6b6b73]">
                         {alternative.reason}
                       </p>
                     </div>
@@ -447,7 +596,7 @@ function SectionLabel({
   return (
     <span
       className={cn(
-        "block font-mono text-xs font-medium tracking-[-0.01em] text-[#85858c]",
+        "block text-sm font-medium tracking-[-0.01em] text-[#2d2d33]",
         className
       )}
     >
@@ -459,12 +608,12 @@ function SectionLabel({
 function PropertiesRail({ rows }: { rows: Array<[string, string]> }) {
   return (
     <aside className="properties-rail" aria-label="Investigation properties">
-      <h2>Properties</h2>
+      <h2 className="text-xs font-medium">Properties</h2>
       <dl>
         {rows.map(([label, value]) => (
           <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
+            <dt className="text-xs">{label}</dt>
+            <dd className="text-xs">{value}</dd>
           </div>
         ))}
       </dl>
@@ -513,7 +662,7 @@ function EvidenceSelector({
           {evidence.title}
         </strong>
         {!compact ? (
-          <small className="block text-xs leading-[1.5] text-[#73737b]">
+          <small className="block text-sm leading-[1.5] text-[#6b6b73]">
             {evidence.claim}
           </small>
         ) : null}
@@ -546,8 +695,8 @@ function EvidenceInspector({
   return (
     <div className="flex flex-col gap-7" aria-live="polite">
       <div className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-[#85858d]">
-          <span className="font-medium text-[var(--accent-cobalt-ink)]">
+        <div className="flex flex-wrap items-center gap-2 text-sm text-[#77777f]">
+          <span className="font-mono text-xs font-medium text-[var(--accent-cobalt-ink)]">
             Receipt [{number}]
           </span>
           <span className="inline-flex items-center gap-2">
@@ -557,7 +706,7 @@ function EvidenceInspector({
         </div>
 
         <div className="flex flex-col gap-2">
-          <h3 className="max-w-[620px] text-xl leading-[1.25] font-[610] tracking-[-0.025em] text-[#29292f]">
+          <h3 className="max-w-[620px] text-xl leading-[1.25] font-medium tracking-[-0.025em] text-[#29292f]">
             {evidence.title}
           </h3>
           <p className="max-w-[650px] text-sm leading-[1.6] text-[#62626a]">
@@ -570,31 +719,33 @@ function EvidenceInspector({
         <div className="flex flex-col gap-5">
           <div className="flex flex-wrap gap-x-7 gap-y-4">
             <span className="grid gap-1">
-              <small className="font-mono text-xs text-[#8c8c94]">Tool</small>
+              <small className="text-xs font-medium text-[#7d7d85]">Tool</small>
               <code className="text-xs font-medium text-[#45454c]">
                 {evidence.source.tool}
               </code>
             </span>
             {event?.rowCount !== undefined ? (
               <span className="grid gap-1">
-                <small className="font-mono text-xs text-[#8c8c94]">Rows</small>
-                <strong className="text-xs font-medium text-[#45454c]">
+                <small className="text-xs font-medium text-[#7d7d85]">
+                  Rows
+                </small>
+                <strong className="text-sm font-medium text-[#45454c]">
                   {event.rowCount.toLocaleString()}
                 </strong>
               </span>
             ) : null}
             {event ? (
               <span className="grid gap-1">
-                <small className="font-mono text-xs text-[#8c8c94]">
+                <small className="text-xs font-medium text-[#7d7d85]">
                   Duration
                 </small>
-                <strong className="text-xs font-medium text-[#45454c]">
+                <strong className="text-sm font-medium text-[#45454c]">
                   {formatMilliseconds(event.durationMs)}
                 </strong>
               </span>
             ) : null}
             <span className="grid gap-1">
-              <small className="font-mono text-xs text-[#8c8c94]">Call</small>
+              <small className="text-xs font-medium text-[#7d7d85]">Call</small>
               <code className="text-xs font-medium text-[#45454c]">
                 {evidence.source.callId}
               </code>
@@ -602,7 +753,7 @@ function EvidenceInspector({
           </div>
 
           {event ? (
-            <p className="max-w-[620px] text-xs leading-[1.55] text-[#65656d]">
+            <p className="max-w-[620px] text-sm leading-[1.6] text-[#606068]">
               {event.summary}
             </p>
           ) : null}
@@ -611,7 +762,7 @@ function EvidenceInspector({
         <div className="grid grid-cols-[repeat(auto-fit,minmax(112px,1fr))] gap-x-5 gap-y-4">
           {evidence.values.map((value) => (
             <span className="grid gap-1" key={value.label}>
-              <small className="font-mono text-xs text-[#8c8c94]">
+              <small className="text-xs font-medium text-[#7d7d85]">
                 {value.label}
               </small>
               <strong className="text-sm font-medium text-[#35353b]">
@@ -623,7 +774,7 @@ function EvidenceInspector({
 
         <div className="flex flex-col gap-2">
           <details className="group/query">
-            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-[5px] py-3 font-mono text-xs font-medium text-[#62626a] [&::-webkit-details-marker]:hidden">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-[5px] py-3 text-sm font-medium text-[#55555d] [&::-webkit-details-marker]:hidden">
               <span>Query input</span>
               <span
                 className="text-[#9b9ba2] group-open/query:hidden"
@@ -645,7 +796,7 @@ function EvidenceInspector({
 
           {event?.result !== undefined ? (
             <details className="group/result">
-              <summary className="flex min-h-11 cursor-pointer list-none items-center gap-[5px] py-3 font-mono text-xs font-medium text-[#62626a] [&::-webkit-details-marker]:hidden">
+              <summary className="flex min-h-11 cursor-pointer list-none items-center gap-[5px] py-3 text-sm font-medium text-[#55555d] [&::-webkit-details-marker]:hidden">
                 <span>Raw result</span>
                 <span
                   className="text-[#9b9ba2] group-open/result:hidden"

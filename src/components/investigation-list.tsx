@@ -71,7 +71,7 @@ function InvestigationListItem({ row }: { row: InvestigationListRow }) {
           </span>
         </div>
         <Link
-          className="truncate text-[13px] text-foreground outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset"
+          className="truncate text-sm text-foreground outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset"
           to={row.to}
         >
           {row.title}

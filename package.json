@@ -37,6 +37,7 @@
     "agents": "^0.17.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "motion": "^13.1.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-router-dom": "^7.18.2",

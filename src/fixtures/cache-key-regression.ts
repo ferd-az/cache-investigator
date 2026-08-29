@@ -151,7 +151,7 @@ const finding: FinalFinding = {
     immediate:
       "Roll back catalog-edge-v42 or restore session_id removal in the /products cache-key normalizer.",
     verify:
-      "Confirm key cardinality returns below 2,000 per five minutes, cache hit rate exceeds 90%, and origin 429s fall below 0.5% for 15 minutes.",
+      "After the rollback, confirm key cardinality returns below 2,000 per five minutes, cache hit rate exceeds 90%, and origin 429s remain below 0.5% for 15 minutes.",
     followUps: [
       "Add a cardinality guardrail for cache-key dimensions.",
       "Alert when cache misses and origin saturation rise together after a deployment.",
