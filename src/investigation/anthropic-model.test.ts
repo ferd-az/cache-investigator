@@ -9,6 +9,7 @@ import {
 } from "./anthropic-model.ts";
 import {
   InvestigationModelError,
+  InvestigationModelResponseError,
   type InvestigationModelContext
 } from "./runtime.ts";
 
@@ -54,6 +55,7 @@ test("Anthropic request uses Sonnet 5 without unsupported sampling or thinking f
   const headers = new Headers(requestedInit?.headers);
   assert.equal(headers.get("anthropic-version"), "2023-06-01");
   assert.equal(headers.has("x-api-key"), true);
+  assert.ok(requestedInit?.signal instanceof AbortSignal);
   const body = JSON.parse(String(requestedInit?.body)) as Record<
     string,
     unknown
@@ -88,30 +90,86 @@ test("Anthropic request uses Sonnet 5 without unsupported sampling or thinking f
   assert.match(String(body.system), /at most 6 representative values/i);
   assert.match(String(body.system), /Never write report-like filler/i);
 
+  assert.match(String(body.system), /status must be exactly one of/i);
+  assert.match(String(body.system), /strictly earlier than to/i);
+
   const finalOnlyRequest = buildAnthropicModelRequest({
     ...modelContext(),
     remainingToolCalls: 0
   });
   assert.deepEqual(finalOnlyRequest.tool_choice, { type: "none" });
+});
 
-  const rejectedContext = modelContext();
-  rejectedContext.investigation.events = [
+test("an exhausted tool budget appends an explicit finalize instruction", () => {
+  const context = modelContext([
     {
-      id: "evt-invalid-final",
-      investigationId: "inv-test",
-      sequence: 1,
-      at: "2026-08-26T14:30:00.000Z",
-      type: "model.failed",
-      turn: 7,
-      message: "finding.evidence[0].values must contain at most 6 entries",
-      attempt: 1,
-      retryable: true
+      kind: "tool",
+      callId: "call:1:query_metrics",
+      evidenceId: "evidence:call:1:query_metrics",
+      call: {
+        tool: "query_metrics",
+        input: { metrics: ["request_count"], ...window, interval: "15m" }
+      },
+      result: { points: [] }
     }
-  ];
-  assert.match(
-    String(buildAnthropicModelRequest(rejectedContext).system),
-    /previous rejected final: finding\.evidence\[0\]\.values/i
+  ]);
+  const messages = buildAnthropicModelMessages({
+    ...context,
+    remainingToolCalls: 0
+  });
+  const last = messages.at(-1);
+  assert.equal(last?.role, "user");
+  assert.equal(last?.content[0].type, "tool_result");
+  const instruction = last?.content.at(-1);
+  assert.equal(instruction?.type, "text");
+  assert.match(String(instruction?.text), /tool-call budget is exhausted/i);
+  assert.match(String(instruction?.text), /"kind":"final"/);
+
+  const withBudget = buildAnthropicModelMessages(context);
+  assert.ok(
+    withBudget.every((message) =>
+      message.content.every(
+        (block) =>
+          block.type !== "text" ||
+          !/tool-call budget is exhausted/i.test(String(block.text))
+      )
+    )
   );
+});
+
+test("a rejected final replays as its own exchange with corrective feedback", () => {
+  const rejectedJson = '{"kind":"final","finding":{"status":"certain"}}';
+  const messages = buildAnthropicModelMessages(
+    modelContext([
+      {
+        kind: "tool",
+        callId: "call:1:query_metrics",
+        evidenceId: "evidence:call:1:query_metrics",
+        call: {
+          tool: "query_metrics",
+          input: { metrics: ["request_count"], ...window, interval: "15m" }
+        },
+        result: { points: [] }
+      },
+      {
+        kind: "rejected_final",
+        responseText: rejectedJson,
+        reason: "Finding status is invalid"
+      }
+    ])
+  );
+
+  assert.deepEqual(
+    messages.map((message) => message.role),
+    ["user", "assistant", "user", "assistant", "user"]
+  );
+  assert.deepEqual(messages[3].content, [{ type: "text", text: rejectedJson }]);
+  assert.equal(messages[4].content[0].type, "text");
+  assert.match(
+    String(messages[4].content[0].text),
+    /rejected: Finding status is invalid/
+  );
+  assert.match(String(messages[4].content[0].text), /only the JSON envelope/i);
 });
 
 test("Anthropic request binds the platform fetch receiver", async () => {
@@ -134,6 +192,7 @@ test("Anthropic history uses valid provider IDs while preserving persisted call 
   const messages = buildAnthropicModelMessages(
     modelContext([
       {
+        kind: "tool",
         callId: "call:1:query_metrics",
         evidenceId: "evidence:call:1:query_metrics",
         call: {
@@ -147,6 +206,7 @@ test("Anthropic history uses valid provider IDs while preserving persisted call 
         result: { points: [{ bucket: window.from, request_count: 1 }] }
       },
       {
+        kind: "tool",
         callId: "call:2:search_logs",
         evidenceId: "evidence:call:2:search_logs",
         call: {
@@ -184,22 +244,18 @@ test("Anthropic history uses valid provider IDs while preserving persisted call 
 });
 
 test("Anthropic adapter parses a final JSON text block and omits nested null optionals", async () => {
+  const finalText = JSON.stringify({
+    kind: "final",
+    finding: {
+      headline: "Cache regression confirmed",
+      evidence: [{ values: [{ label: "error rate", value: 4.2, unit: null }] }]
+    }
+  });
   const model = modelReturning({
     stop_reason: "end_turn",
     content: [
       { type: "thinking", thinking: "private adaptive reasoning" },
-      {
-        type: "text",
-        text: JSON.stringify({
-          kind: "final",
-          finding: {
-            headline: "Cache regression confirmed",
-            evidence: [
-              { values: [{ label: "error rate", value: 4.2, unit: null }] }
-            ]
-          }
-        })
-      }
+      { type: "text", text: finalText }
     ]
   });
 
@@ -208,8 +264,62 @@ test("Anthropic adapter parses a final JSON text block and omits nested null opt
     finding: {
       headline: "Cache regression confirmed",
       evidence: [{ values: [{ label: "error rate", value: 4.2 }] }]
-    }
+    },
+    responseText: finalText
   });
+});
+
+test("Anthropic adapter recovers a final envelope wrapped in prose", async () => {
+  const model = modelReturning({
+    stop_reason: "end_turn",
+    content: [
+      {
+        type: "text",
+        text: 'Here is the final finding:\n{"kind":"final","finding":{"headline":"Cache regression confirmed"}}\nLet me know if anything is unclear.'
+      }
+    ]
+  });
+
+  const decision = await model.next(modelContext());
+  assert.equal(decision.type, "final");
+  if (decision.type !== "final") return;
+  assert.deepEqual(decision.finding, {
+    headline: "Cache regression confirmed"
+  });
+});
+
+test("Anthropic non-JSON final text raises a response error carrying the text", async () => {
+  const model = modelReturning({
+    stop_reason: "end_turn",
+    content: [
+      { type: "text", text: "I could not produce the finding this turn." }
+    ]
+  });
+
+  await assert.rejects(
+    model.next(modelContext()),
+    (error: unknown) =>
+      error instanceof InvestigationModelResponseError &&
+      /not valid JSON/.test(error.message) &&
+      error.responseText === "I could not produce the finding this turn."
+  );
+});
+
+test("Anthropic empty responses report the stop reason and block types", async () => {
+  const model = modelReturning({
+    stop_reason: "end_turn",
+    content: [{ type: "thinking", thinking: "silent" }]
+  });
+
+  await assert.rejects(
+    model.next(modelContext()),
+    (error: unknown) =>
+      error instanceof InvestigationModelError &&
+      !(error instanceof InvestigationModelResponseError) &&
+      error.retryable &&
+      /stop_reason: end_turn/.test(error.message) &&
+      /content blocks: thinking/.test(error.message)
+  );
 });
 
 test("Anthropic adapter rejects multiple tool calls deterministically", async () => {

@@ -10,6 +10,7 @@ import {
   InvestigationChaosDisabledError,
   InvestigationStartConflictError,
   prepareInvestigation,
+  reconcileStalledInvestigation,
   resolveInvestigationStart,
   runInvestigation
 } from "./investigation/runtime.ts";
@@ -77,9 +78,33 @@ export class InvestigationAgent extends Agent<Env, InvestigationState> {
     };
   }
 
-  async getInvestigation(id: string): Promise<Investigation | null> {
-    return new D1InvestigationRepository(this.env.TELEMETRY_DB).get(id);
+  async getInvestigation(
+    id: string,
+    appOrigin?: string
+  ): Promise<Investigation | null> {
+    const repository = new D1InvestigationRepository(this.env.TELEMETRY_DB);
+    const reconciled = await reconcileStalledInvestigation(repository, id, {
+      resume: async () => {
+        if (this.resumingStalledInvestigation) return;
+        this.resumingStalledInvestigation = true;
+        this.ctx.waitUntil(
+          this.runDurableInvestigation(id, appOrigin)
+            .catch((error) => {
+              console.error("Stalled investigation resume failed", {
+                investigationId: id,
+                error
+              });
+            })
+            .finally(() => {
+              this.resumingStalledInvestigation = false;
+            })
+        );
+      }
+    });
+    return reconciled?.investigation ?? null;
   }
+
+  private resumingStalledInvestigation = false;
 
   async onFiberRecovered(context: FiberRecoveryContext) {
     if (context.name !== "cache-investigation") return;
@@ -181,7 +206,8 @@ export default {
           decodeURIComponent(match[1])
         );
         const investigation = await agent.getInvestigation(
-          decodeURIComponent(match[1])
+          decodeURIComponent(match[1]),
+          url.origin
         );
         return investigation
           ? Response.json(investigation)

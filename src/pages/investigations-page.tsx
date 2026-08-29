@@ -8,6 +8,7 @@ import type {
   InvestigationStatus,
   InvestigationSummary
 } from "@/investigation/contracts";
+import { displayInvestigationId } from "@/investigation/display-investigation-id";
 import type { StartInvestigationInput } from "@/investigation/runtime";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -295,10 +296,6 @@ function toInvestigationRow(
     ),
     to: `/i/${encodeURIComponent(investigation.id)}`
   };
-}
-
-function displayInvestigationId(id: string) {
-  return `INV-${id.replace(/^inv_/, "").slice(0, 6).toUpperCase()}`;
 }
 
 function formatListTimestamp(value: string) {

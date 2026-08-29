@@ -15,7 +15,6 @@ import type {
   InvestigationPlanStep
 } from "../investigation/contracts";
 import { cn } from "../lib/utils";
-import { MetadataSeparator } from "./ui/metadata-separator";
 
 type ToolStartedEvent = Extract<InvestigationEvent, { type: "tool.started" }>;
 type ToolProgressEvent = Extract<InvestigationEvent, { type: "tool.progress" }>;
@@ -25,10 +24,6 @@ type ToolCompletedEvent = Extract<
 >;
 type ToolFailedEvent = Extract<InvestigationEvent, { type: "tool.failed" }>;
 type ModelFailedEvent = Extract<InvestigationEvent, { type: "model.failed" }>;
-type EvidenceEvent = Extract<
-  InvestigationEvent,
-  { type: "observation.added" | "hypothesis.updated" }
->;
 
 type ToolCallLifecycle = {
   callId: string;
@@ -71,15 +66,6 @@ export function LiveInvestigation({
     () => findLatestPlan(investigation),
     [investigation]
   );
-  const evidenceEvents = useMemo(
-    () =>
-      investigation.events.filter(
-        (event): event is EvidenceEvent =>
-          event.type === "observation.added" ||
-          event.type === "hypothesis.updated"
-      ),
-    [investigation.events]
-  );
   const terminalEvent = useMemo(
     () => findTerminalEvent(investigation.events),
     [investigation.events]
@@ -95,12 +81,28 @@ export function LiveInvestigation({
       ),
     [investigation.events]
   );
+  const currentActivityVariants = {
+    enter: reduceMotion
+      ? { opacity: 1 }
+      : { opacity: 0, transform: "translateY(10px)" },
+    center: {
+      opacity: 1,
+      transform: "translateY(0px)"
+    },
+    exit: reduceMotion
+      ? { opacity: 1 }
+      : { opacity: 0, transform: "translateY(-10px)" }
+  };
+  const currentActivityTransition = {
+    duration: reduceMotion ? 0 : 0.14,
+    ease: "easeOut" as const
+  };
 
   return (
     <div className="mx-auto w-full max-w-[1280px] px-5 pt-5 pb-20 sm:px-7 sm:pt-6 xl:px-12 xl:pt-7 xl:pb-24">
       <article className="mx-auto flex w-full max-w-[1120px] flex-col gap-12 pt-4">
         <header className="flex max-w-3xl flex-col gap-5">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-[#85858d] tabular-nums">
             <InvestigationStatus status={investigation.status} />
             <MetadataValue>
               <code>{investigation.scope.service}</code>
@@ -116,64 +118,48 @@ export function LiveInvestigation({
           </div>
 
           <div className="flex flex-col gap-3">
-            <h1 className="text-3xl font-medium text-foreground sm:text-4xl">
+            <h1 className="max-w-[680px] text-3xl leading-[1.12] font-medium tracking-[-0.04em] text-balance text-[#202025] sm:text-4xl">
               {investigation.title}
             </h1>
-            <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+            <p className="max-w-2xl text-sm leading-[1.6] text-[#686870]">
               {investigation.scope.question}
             </p>
           </div>
         </header>
 
         <div className="grid items-start gap-12 @4xl/main:grid-cols-[minmax(0,1fr)_280px]">
-          <div className="flex min-w-0 flex-col gap-12">
-            <section
-              className="flex flex-col gap-5"
-              aria-labelledby="current-step-title"
-            >
-              <h2
-                className="text-xl font-medium text-foreground"
-                id="current-step-title"
-              >
-                {isActive ? "Current step" : "Outcome"}
-              </h2>
+          <section
+            className="flex min-w-0 flex-col gap-5 @4xl/main:col-start-1 @4xl/main:row-start-1"
+            aria-labelledby="current-step-title"
+          >
+            <LiveSectionHeading id="current-step-title">
+              {isActive ? "Current step" : "Outcome"}
+            </LiveSectionHeading>
 
-              <div className="flex min-h-[168px] flex-col justify-center rounded-2xl bg-muted/50 p-5 sm:p-6">
+            <div className="flex min-h-[168px] flex-col justify-center overflow-hidden rounded-2xl bg-muted/50 p-5 sm:p-6">
+              <div className="grid w-full">
                 <AnimatePresence initial={false} mode="wait">
                   {activeCall ? (
                     <motion.div
+                      animate="center"
+                      className="col-start-1 row-start-1 w-full"
+                      exit="exit"
+                      initial="enter"
                       key={activeCall.callId}
-                      initial={
-                        reduceMotion
-                          ? false
-                          : { opacity: 0, transform: "translateY(4px)" }
-                      }
-                      animate={{ opacity: 1, transform: "translateY(0px)" }}
-                      exit={
-                        reduceMotion
-                          ? { opacity: 1 }
-                          : { opacity: 0, transform: "translateY(-4px)" }
-                      }
-                      transition={{
-                        duration: reduceMotion ? 0 : 0.16,
-                        ease: "easeOut"
-                      }}
+                      transition={currentActivityTransition}
+                      variants={currentActivityVariants}
                     >
                       <ActiveToolCall call={activeCall} now={now} />
                     </motion.div>
                   ) : (
                     <motion.div
+                      animate="center"
+                      className="col-start-1 row-start-1 w-full"
+                      exit="exit"
+                      initial="enter"
                       key={`${investigation.status}:${terminalEvent?.id ?? "plan"}`}
-                      initial={
-                        reduceMotion
-                          ? false
-                          : { opacity: 0, transform: "translateY(4px)" }
-                      }
-                      animate={{ opacity: 1, transform: "translateY(0px)" }}
-                      transition={{
-                        duration: reduceMotion ? 0 : 0.16,
-                        ease: "easeOut"
-                      }}
+                      transition={currentActivityTransition}
+                      variants={currentActivityVariants}
                     >
                       <CurrentInvestigationState
                         investigation={investigation}
@@ -187,62 +173,55 @@ export function LiveInvestigation({
                   )}
                 </AnimatePresence>
               </div>
-            </section>
+            </div>
+          </section>
 
-            <section
-              className="flex flex-col gap-5"
-              aria-labelledby="completed-work-title"
-            >
-              <div className="flex items-baseline justify-between gap-4">
-                <h2
-                  className="text-xl font-medium text-foreground"
-                  id="completed-work-title"
-                >
-                  Completed work
-                </h2>
-                <span className="font-mono text-xs text-muted-foreground tabular-nums">
-                  {settledCalls.length}{" "}
-                  {settledCalls.length === 1 ? "call" : "calls"}
-                </span>
-              </div>
+          <section
+            className="flex min-w-0 flex-col gap-5 @4xl/main:col-start-1 @4xl/main:row-start-2"
+            aria-labelledby="investigation-trail-title"
+          >
+            <div className="flex items-baseline justify-between gap-4">
+              <LiveSectionHeading id="investigation-trail-title">
+                Investigation trail
+              </LiveSectionHeading>
+              <span className="font-mono text-xs text-[#85858d] tabular-nums">
+                {settledCalls.length}{" "}
+                {settledCalls.length === 1 ? "call" : "calls"}
+              </span>
+            </div>
 
-              {settledCalls.length ? (
-                <ol className="border-t border-border/70">
-                  <AnimatePresence initial={false}>
-                    {settledCalls.map((call) => (
-                      <motion.li
-                        key={call.callId}
-                        initial={
-                          reduceMotion
-                            ? false
-                            : { opacity: 0, transform: "translateY(4px)" }
-                        }
-                        animate={{ opacity: 1, transform: "translateY(0px)" }}
-                        transition={{
-                          duration: reduceMotion ? 0 : 0.16,
-                          ease: "easeOut"
-                        }}
-                      >
-                        <SettledToolCall
-                          call={call}
-                          evidenceEvents={evidenceEvents}
-                        />
-                      </motion.li>
-                    ))}
-                  </AnimatePresence>
-                </ol>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Completed tool calls will settle here.
-                </p>
-              )}
-            </section>
-          </div>
+            {settledCalls.length ? (
+              <ol className="flex flex-col gap-3">
+                <AnimatePresence initial={false}>
+                  {settledCalls.map((call) => (
+                    <motion.li
+                      key={call.callId}
+                      initial={
+                        reduceMotion
+                          ? false
+                          : { opacity: 0, transform: "translateY(4px)" }
+                      }
+                      animate={{ opacity: 1, transform: "translateY(0px)" }}
+                      transition={{
+                        duration: reduceMotion ? 0 : 0.16,
+                        ease: "easeOut"
+                      }}
+                    >
+                      <SettledToolCall call={call} />
+                    </motion.li>
+                  ))}
+                </AnimatePresence>
+              </ol>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Tool calls will settle here as the investigation progresses.
+              </p>
+            )}
+          </section>
 
-          <aside className="flex flex-col gap-10 @4xl/main:sticky @4xl/main:top-6">
-            <PlanRail steps={latestPlan} />
+          <aside className="contents">
+            <PlanRail isRunActive={isActive} steps={latestPlan} />
             <ModelNoticesRail events={modelFailures} />
-            <FindingsRail events={evidenceEvents} />
           </aside>
         </div>
       </article>
@@ -258,7 +237,7 @@ function InvestigationStatus({ status }: { status: Investigation["status"] }) {
       className: "text-muted-foreground"
     },
     running: {
-      icon: Loading03Icon,
+      icon: CircleDashedIcon,
       label: "Investigating",
       className: "text-[var(--accent-cobalt-ink)]"
     },
@@ -287,11 +266,6 @@ function InvestigationStatus({ status }: { status: Investigation["status"] }) {
       )}
     >
       <HugeiconsIcon
-        className={
-          status === "running"
-            ? "animate-spin motion-reduce:animate-none"
-            : undefined
-        }
         icon={config.icon}
         size={14}
         strokeWidth={1.6}
@@ -303,11 +277,23 @@ function InvestigationStatus({ status }: { status: Investigation["status"] }) {
 }
 
 function MetadataValue({ children }: { children: ReactNode }) {
+  return <span className="inline-flex items-center">{children}</span>;
+}
+
+function LiveSectionHeading({
+  children,
+  id
+}: {
+  children: ReactNode;
+  id: string;
+}) {
   return (
-    <span className="inline-flex items-center gap-2">
-      <MetadataSeparator />
+    <h2
+      className="text-xl font-medium tracking-[-0.025em] text-[#29292f]"
+      id={id}
+    >
       {children}
-    </span>
+    </h2>
   );
 }
 
@@ -343,7 +329,7 @@ function ActiveToolCall({
       />
       <div className="flex min-w-0 flex-col gap-4">
         <div className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium text-foreground">
+          <h3 className="text-sm leading-[1.35] font-medium tracking-[-0.01em] text-[#2d2d33]">
             {displayToolLabel(call.started)}
           </h3>
           <CallMetadata
@@ -361,15 +347,17 @@ function ActiveToolCall({
           {failure ? (
             <div className="flex flex-col gap-1">
               <span className="text-xs font-medium text-amber-700">
-                Attempt {failure.attempt} failed · retrying
+                Attempt {failure.attempt} failed. Retrying
               </span>
-              <p className="text-sm text-muted-foreground">{failure.message}</p>
+              <p className="text-sm leading-[1.5] text-[#686870]">
+                {failure.message}
+              </p>
             </div>
           ) : null}
           <AnimatePresence initial={false} mode="wait">
             {progress && (!failure || progress.sequence > failure.sequence) ? (
               <motion.p
-                className="text-sm text-muted-foreground"
+                className="text-sm leading-[1.5] text-[#686870]"
                 key={progress.id}
                 initial={
                   reduceMotion
@@ -391,7 +379,7 @@ function ActiveToolCall({
               </motion.p>
             ) : !failure ? (
               <motion.p
-                className="text-sm text-muted-foreground"
+                className="text-sm leading-[1.5] text-[#686870]"
                 key="in-progress"
                 initial={false}
                 animate={{ opacity: 1 }}
@@ -496,8 +484,8 @@ function CurrentInvestigationState({
         iconClassName="animate-spin text-amber-700 motion-reduce:animate-none"
         eyebrow={
           latestModelFailure.retryable
-            ? `Retrying model request · attempt ${latestModelFailure.attempt + 1}`
-            : `Correcting rejected model output · attempt ${
+            ? `Retrying model request, attempt ${latestModelFailure.attempt + 1}`
+            : `Correcting rejected model output, attempt ${
                 latestModelFailure.attempt + 1
               }`
         }
@@ -571,12 +559,12 @@ function StateMessage({
         aria-hidden="true"
       />
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium text-muted-foreground">
-          {eyebrow}
-        </span>
-        <h3 className="text-sm font-medium text-foreground">{title}</h3>
+        <span className="text-xs font-medium text-[#74747c]">{eyebrow}</span>
+        <h3 className="text-sm leading-[1.35] font-medium tracking-[-0.01em] text-[#2d2d33]">
+          {title}
+        </h3>
         {detail ? (
-          <p className="text-sm text-muted-foreground">{detail}</p>
+          <p className="text-sm leading-[1.6] text-[#686870]">{detail}</p>
         ) : null}
         {live ? (
           <ActivityAge at={activityAt} now={now} />
@@ -632,10 +620,9 @@ function CallMetadata({
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#85858d]">
       {metadata.map((item, index) => (
-        <span className="inline-flex items-center gap-2" key={index}>
-          {index ? <MetadataSeparator /> : null}
+        <span className="inline-flex items-center" key={index}>
           {item}
         </span>
       ))}
@@ -643,13 +630,7 @@ function CallMetadata({
   );
 }
 
-function SettledToolCall({
-  call,
-  evidenceEvents
-}: {
-  call: ToolCallLifecycle;
-  evidenceEvents: EvidenceEvent[];
-}) {
+function SettledToolCall({ call }: { call: ToolCallLifecycle }) {
   const completed = call.completed;
   const lastFailure = call.failures.at(-1);
   const failed = !completed && Boolean(lastFailure);
@@ -658,8 +639,8 @@ function SettledToolCall({
   const receiptIds = completed?.evidenceIds ?? [];
 
   return (
-    <details className="group border-b border-border/70">
-      <summary className="grid min-h-11 cursor-pointer list-none grid-cols-[20px_minmax(0,1fr)_20px] gap-3 py-5 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
+    <details className="group rounded-2xl bg-muted/30 px-4 sm:px-5">
+      <summary className="grid min-h-11 cursor-pointer list-none grid-cols-[20px_minmax(0,1fr)_20px] gap-3 py-4 outline-none focus-visible:ring-2 focus-visible:ring-ring/40 [&::-webkit-details-marker]:hidden">
         <HugeiconsIcon
           className={cn(
             "mt-0.5",
@@ -680,7 +661,7 @@ function SettledToolCall({
         />
 
         <span className="flex min-w-0 flex-col gap-2">
-          <span className="text-sm font-medium text-foreground">
+          <span className="text-sm leading-[1.35] font-medium tracking-[-0.01em] text-[#2d2d33]">
             {displayToolLabel(call.started)}
           </span>
           <CallMetadata
@@ -691,8 +672,8 @@ function SettledToolCall({
           />
           <span
             className={cn(
-              "text-sm leading-relaxed",
-              failed ? "text-destructive" : "text-muted-foreground"
+              "text-sm leading-[1.5]",
+              failed ? "text-destructive" : "text-[#686870]"
             )}
           >
             {completed?.summary ??
@@ -744,28 +725,14 @@ function SettledToolCall({
               Evidence receipts
             </h4>
             <div className="flex flex-wrap gap-2">
-              {receiptIds.map((evidenceId) => {
-                const relatedEvent = evidenceEvents.find((event) =>
-                  event.evidenceIds.includes(evidenceId)
-                );
-
-                return relatedEvent ? (
-                  <a
-                    className="inline-flex min-h-11 items-center rounded-xl bg-muted px-3 font-mono text-xs text-[var(--accent-cobalt-ink)] hover:underline"
-                    href={`#live-finding-${relatedEvent.id}`}
-                    key={evidenceId}
-                  >
-                    {evidenceId}
-                  </a>
-                ) : (
-                  <code
-                    className="inline-flex min-h-11 items-center rounded-xl bg-muted px-3 text-xs text-muted-foreground"
-                    key={evidenceId}
-                  >
-                    {evidenceId}
-                  </code>
-                );
-              })}
+              {receiptIds.map((evidenceId) => (
+                <code
+                  className="inline-flex min-h-11 items-center rounded-xl bg-muted px-3 text-xs text-muted-foreground"
+                  key={evidenceId}
+                >
+                  {evidenceId}
+                </code>
+              ))}
             </div>
           </div>
         ) : null}
@@ -821,42 +788,58 @@ function PayloadDisclosure({
   );
 }
 
-function PlanRail({ steps }: { steps: InvestigationPlanStep[] }) {
+function PlanRail({
+  isRunActive,
+  steps
+}: {
+  isRunActive: boolean;
+  steps: InvestigationPlanStep[];
+}) {
   return (
-    <section className="flex flex-col gap-4" aria-labelledby="live-plan-title">
-      <h2 className="text-sm font-medium text-foreground" id="live-plan-title">
-        Plan
-      </h2>
+    <section
+      className="flex flex-col gap-5 @4xl/main:col-start-2 @4xl/main:row-start-1"
+      aria-labelledby="live-plan-title"
+    >
+      <LiveSectionHeading id="live-plan-title">Plan</LiveSectionHeading>
       {steps.length ? (
         <ol className="flex flex-col gap-4">
-          {steps.map((step) => (
-            <li
-              className="grid grid-cols-[16px_minmax(0,1fr)] gap-2.5"
-              key={step.id}
-            >
-              <PlanStatusIcon status={step.status} />
-              <span className="flex flex-col gap-1">
-                <span
-                  className={cn(
-                    "text-sm",
-                    step.status === "active"
-                      ? "font-medium text-foreground"
-                      : "text-muted-foreground"
-                  )}
-                >
-                  <span className="sr-only">
-                    {step.status.replaceAll("_", " ")}:{" "}
+          {steps.map((step) => {
+            const isStepActive = isRunActive && step.status === "active";
+            const accessibleStatus =
+              step.status === "active" && !isRunActive
+                ? "not completed"
+                : step.status.replaceAll("_", " ");
+
+            return (
+              <li
+                className="grid grid-cols-[16px_minmax(0,1fr)] gap-2.5"
+                key={step.id}
+              >
+                <PlanStatusIcon
+                  isRunActive={isRunActive}
+                  status={step.status}
+                />
+                <span className="flex flex-col gap-1">
+                  <span
+                    className={cn(
+                      "text-sm leading-[1.35] tracking-[-0.01em]",
+                      isStepActive
+                        ? "font-medium text-[#2d2d33]"
+                        : "text-[#74747c]"
+                    )}
+                  >
+                    <span className="sr-only">{accessibleStatus}: </span>
+                    {step.title}
                   </span>
-                  {step.title}
+                  {step.detail ? (
+                    <span className="text-xs leading-[1.5] text-[#74747c]">
+                      {step.detail}
+                    </span>
+                  ) : null}
                 </span>
-                {step.detail ? (
-                  <span className="text-xs leading-relaxed text-muted-foreground">
-                    {step.detail}
-                  </span>
-                ) : null}
-              </span>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ol>
       ) : (
         <p className="text-sm text-muted-foreground">
@@ -868,25 +851,26 @@ function PlanRail({ steps }: { steps: InvestigationPlanStep[] }) {
 }
 
 function PlanStatusIcon({
+  isRunActive,
   status
 }: {
+  isRunActive: boolean;
   status: InvestigationPlanStep["status"];
 }) {
-  const isActive = status === "active";
+  const isActive = isRunActive && status === "active";
   const isComplete = status === "completed";
 
   return (
     <HugeiconsIcon
       className={cn(
         "mt-0.5",
-        isActive &&
-          "animate-spin text-[var(--accent-cobalt-ink)] motion-reduce:animate-none",
+        isActive && "text-[var(--accent-cobalt-ink)]",
         isComplete && "text-[var(--accent-emerald)]",
         !isActive && !isComplete && "text-muted-foreground"
       )}
       icon={
         isActive
-          ? Loading03Icon
+          ? CircleDashedIcon
           : isComplete
             ? CheckmarkCircle01Icon
             : CircleDashedIcon
@@ -903,15 +887,12 @@ function ModelNoticesRail({ events }: { events: ModelFailedEvent[] }) {
 
   return (
     <section
-      className="flex flex-col gap-4"
+      className="flex flex-col gap-5 @4xl/main:col-start-2 @4xl/main:row-start-2"
       aria-labelledby="model-notices-title"
     >
-      <h2
-        className="text-sm font-medium text-foreground"
-        id="model-notices-title"
-      >
+      <LiveSectionHeading id="model-notices-title">
         Run notices
-      </h2>
+      </LiveSectionHeading>
       <ol className="flex flex-col gap-5">
         {events.map((event) => (
           <li className="flex flex-col gap-1.5" key={event.id}>
@@ -923,9 +904,8 @@ function ModelNoticesRail({ events }: { events: ModelFailedEvent[] }) {
             <p className="text-sm leading-relaxed text-foreground">
               {event.message}
             </p>
-            <span className="flex flex-wrap items-center gap-2 font-mono text-xs text-muted-foreground tabular-nums">
+            <span className="flex flex-wrap items-center gap-3 font-mono text-xs text-muted-foreground tabular-nums">
               <span>attempt {event.attempt}</span>
-              <MetadataSeparator />
               <time dateTime={event.at}>
                 {timeFormatter.format(new Date(event.at))} UTC
               </time>
@@ -933,57 +913,6 @@ function ModelNoticesRail({ events }: { events: ModelFailedEvent[] }) {
           </li>
         ))}
       </ol>
-    </section>
-  );
-}
-
-function FindingsRail({ events }: { events: EvidenceEvent[] }) {
-  return (
-    <section
-      className="flex flex-col gap-4"
-      aria-labelledby="live-findings-title"
-    >
-      <h2
-        className="text-sm font-medium text-foreground"
-        id="live-findings-title"
-      >
-        Findings so far
-      </h2>
-      {events.length ? (
-        <ol className="flex flex-col gap-5">
-          {events.map((event) => (
-            <li
-              className="flex scroll-mt-6 flex-col gap-1.5"
-              id={`live-finding-${event.id}`}
-              key={event.id}
-            >
-              {event.type === "observation.added" ? (
-                <>
-                  <p className="text-sm leading-relaxed text-foreground">
-                    {event.detail}
-                  </p>
-                  <span className="font-mono text-xs text-muted-foreground">
-                    {event.title}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <p className="text-sm leading-relaxed text-foreground">
-                    {event.statement}
-                  </p>
-                  <span className="text-xs text-muted-foreground">
-                    {event.status.replaceAll("_", " ")}
-                  </span>
-                </>
-              )}
-            </li>
-          ))}
-        </ol>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Persisted observations will appear here.
-        </p>
-      )}
     </section>
   );
 }

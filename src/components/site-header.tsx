@@ -4,6 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { completedCacheKeyRegression } from "@/fixtures/cache-key-regression";
+import { displayInvestigationId } from "@/investigation/display-investigation-id";
 import { unresolvedInvestigation } from "@/pages/investigations-page";
 
 export function SiteHeader() {
@@ -11,11 +12,11 @@ export function SiteHeader() {
   const investigationId = pathname.match(/^\/i\/([^/]+)$/)?.[1];
   const investigationTitle =
     investigationId === completedCacheKeyRegression.id
-      ? completedCacheKeyRegression.title
+      ? "INV-041"
       : investigationId === unresolvedInvestigation.id
-        ? unresolvedInvestigation.title
+        ? "ALM-07"
         : investigationId
-          ? "Investigation"
+          ? displayInvestigationId(decodeURIComponent(investigationId))
           : null;
 
   return (

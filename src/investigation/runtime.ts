@@ -31,7 +31,13 @@ export const investigationRunLimits = {
   maxToolAttempts: 2,
   maxModelAttemptsPerTurn: 2,
   maxInvalidFinalAttempts: 3,
+  maxRejectedFinalChars: 16_000,
   slowChaosDelayMs: 5_000
+} as const;
+
+export const investigationStallLimits = {
+  resumeAfterMs: 3 * 60_000,
+  failAfterMs: 10 * 60_000
 } as const;
 
 export type StartInvestigationInput = {
@@ -46,13 +52,30 @@ export type ResolvedInvestigationStart = {
   input: Required<StartInvestigationInput>;
 };
 
-export type InvestigationHistoryEntry = {
+export type InvestigationToolHistoryEntry = {
+  kind: "tool";
   callId: string;
   evidenceId: string;
   call: InvestigationToolCall;
   result?: unknown;
   error?: string;
 };
+
+export type InvestigationRejectedFinalHistoryEntry = {
+  kind: "rejected_final";
+  responseText: string;
+  reason: string;
+};
+
+export type InvestigationHistoryEntry =
+  | InvestigationToolHistoryEntry
+  | InvestigationRejectedFinalHistoryEntry;
+
+export function isToolHistoryEntry(
+  entry: InvestigationHistoryEntry
+): entry is InvestigationToolHistoryEntry {
+  return entry.kind === "tool";
+}
 
 export type InvestigationModelContext = {
   investigation: Investigation;
@@ -67,7 +90,7 @@ export type InvestigationModelDecision =
       call: InvestigationToolCall;
       rationale: string;
     }
-  | { type: "final"; finding: unknown }
+  | { type: "final"; finding: unknown; responseText?: string }
   | { type: "no_findings"; summary: string };
 
 export interface InvestigationModel {
@@ -89,7 +112,7 @@ type PendingToolDecision = {
 };
 
 type PendingTerminalDecision =
-  | { type: "final"; turn: number; finding: unknown }
+  | { type: "final"; turn: number; finding: unknown; responseText?: string }
   | { type: "no_findings"; turn: number; summary: string };
 
 export type InvestigationCheckpoint = {
@@ -134,6 +157,16 @@ export class InvestigationModelError extends Error {
   constructor(message: string, retryable = true) {
     super(message);
     this.retryable = retryable;
+  }
+}
+
+export class InvestigationModelResponseError extends InvestigationModelError {
+  override name = "InvestigationModelResponseError";
+  readonly responseText: string;
+
+  constructor(message: string, responseText: string) {
+    super(message, true);
+    this.responseText = responseText;
   }
 }
 
@@ -199,10 +232,7 @@ export async function runInvestigation(
       investigationId
     );
   let checkpoint = loadedCheckpoint
-    ? {
-        ...loadedCheckpoint,
-        invalidFinalAttempts: loadedCheckpoint.invalidFinalAttempts ?? 0
-      }
+    ? normalizeLoadedCheckpoint(loadedCheckpoint)
     : initialCheckpoint(investigation.configuration.chaos);
 
   if (investigation.status === "queued") {
@@ -265,6 +295,7 @@ export async function runInvestigation(
           investigation,
           checkpoint,
           messageOf(error),
+          rejectedFinalText(checkpoint.pending),
           options,
           now
         );
@@ -328,6 +359,30 @@ export async function runInvestigation(
             investigationRunLimits.maxToolCalls - checkpoint.toolCalls
         });
       } catch (error) {
+        if (error instanceof InvestigationModelResponseError) {
+          checkpoint = await recordInvalidFinal(
+            investigation,
+            checkpoint,
+            error.message,
+            error.responseText,
+            options,
+            now
+          );
+          if (
+            checkpoint.invalidFinalAttempts >=
+            investigationRunLimits.maxInvalidFinalAttempts
+          ) {
+            return failInvestigation(
+              investigation,
+              "The model repeatedly returned an invalid final finding",
+              false,
+              checkpoint,
+              options,
+              now
+            );
+          }
+          continue;
+        }
         const modelError =
           error instanceof InvestigationModelError
             ? error
@@ -378,6 +433,70 @@ export async function runInvestigation(
     };
     await saveCheckpoint(options, investigationId, checkpoint);
   }
+}
+
+export type StalledInvestigationReconciliation = {
+  investigation: Investigation;
+  action: "none" | "resumed" | "failed";
+};
+
+export async function reconcileStalledInvestigation(
+  repository: InvestigationRepository,
+  investigationId: string,
+  options: { now?: () => Date; resume?: () => Promise<void> } = {}
+): Promise<StalledInvestigationReconciliation | null> {
+  const investigation = await repository.get(investigationId);
+  if (!investigation) return null;
+  if (isTerminal(investigation.status)) {
+    return { investigation, action: "none" };
+  }
+
+  const now = (options.now ?? (() => new Date()))();
+  const silentMs = now.getTime() - lastInvestigationActivityMs(investigation);
+
+  if (silentMs >= investigationStallLimits.failAfterMs) {
+    const current = await repository.get(investigationId);
+    if (!current || isTerminal(current.status)) {
+      return current ? { investigation: current, action: "none" } : null;
+    }
+    const silentMinutes = Math.round(silentMs / 60_000);
+    await repository.appendEvent(
+      investigationId,
+      "stall.failed",
+      now.toISOString(),
+      {
+        type: "investigation.failed",
+        message: `The investigation stalled: it made no progress for ${silentMinutes} minutes and was marked failed`,
+        recoverable: false
+      }
+    );
+    await repository.patch(investigationId, {
+      status: "failed",
+      completedAt: now.toISOString()
+    });
+    const failed = await repository.get(investigationId);
+    return { investigation: failed ?? investigation, action: "failed" };
+  }
+
+  if (silentMs >= investigationStallLimits.resumeAfterMs && options.resume) {
+    await options.resume();
+    return { investigation, action: "resumed" };
+  }
+
+  return { investigation, action: "none" };
+}
+
+function lastInvestigationActivityMs(investigation: Investigation) {
+  return Math.max(
+    ...[
+      investigation.createdAt,
+      investigation.startedAt,
+      ...investigation.events.map((event) => event.at)
+    ]
+      .filter((stamp): stamp is string => typeof stamp === "string")
+      .map((stamp) => Date.parse(stamp))
+      .filter(Number.isFinite)
+  );
 }
 
 async function executePendingTool(
@@ -465,6 +584,7 @@ async function executePendingTool(
       history: [
         ...checkpoint.history,
         {
+          kind: "tool",
           callId: pending.callId,
           evidenceId: pending.evidenceId,
           call: pending.call,
@@ -531,6 +651,7 @@ async function executePendingTool(
       history: [
         ...checkpoint.history,
         {
+          kind: "tool",
           callId: pending.callId,
           evidenceId: pending.evidenceId,
           call: pending.call,
@@ -576,6 +697,7 @@ async function executePendingTool(
       history: [
         ...checkpoint.history,
         {
+          kind: "tool",
           callId: pending.callId,
           evidenceId: pending.evidenceId,
           call: pending.call,
@@ -676,6 +798,7 @@ async function recordInvalidFinal(
   investigation: Investigation,
   checkpoint: InvestigationCheckpoint,
   message: string,
+  responseText: string,
   options: InvestigationRunnerOptions,
   now: () => Date
 ): Promise<InvestigationCheckpoint> {
@@ -694,14 +817,36 @@ async function recordInvalidFinal(
       retryable
     }
   );
-  const next = {
+  const next: InvestigationCheckpoint = {
     ...checkpoint,
     modelFailures: 0,
-    invalidFinalAttempts: attempt
+    invalidFinalAttempts: attempt,
+    history: [
+      ...checkpoint.history,
+      {
+        kind: "rejected_final",
+        responseText: boundedRejectedFinalText(responseText),
+        reason: message
+      }
+    ]
   };
   delete next.pending;
   await saveCheckpoint(options, investigation.id, next);
   return next;
+}
+
+function rejectedFinalText(
+  pending: Extract<PendingTerminalDecision, { type: "final" }>
+): string {
+  if (pending.responseText !== undefined) return pending.responseText;
+  return JSON.stringify(pending.finding) ?? "{}";
+}
+
+function boundedRejectedFinalText(responseText: string) {
+  const limit = investigationRunLimits.maxRejectedFinalChars;
+  return responseText.length <= limit
+    ? responseText
+    : `${responseText.slice(0, limit)}\n…[truncated]`;
 }
 
 async function updatePlan(
@@ -989,6 +1134,23 @@ function initialPlan(): InvestigationPlanStep[] {
   ];
 }
 
+function normalizeLoadedCheckpoint(
+  loaded: InvestigationCheckpoint
+): InvestigationCheckpoint {
+  return {
+    ...loaded,
+    invalidFinalAttempts: loaded.invalidFinalAttempts ?? 0,
+    history: loaded.history.map((entry) =>
+      (entry as { kind?: InvestigationHistoryEntry["kind"] }).kind === undefined
+        ? {
+            ...(entry as Omit<InvestigationToolHistoryEntry, "kind">),
+            kind: "tool" as const
+          }
+        : entry
+    )
+  };
+}
+
 function initialCheckpoint(
   mode: InvestigationChaosMode
 ): InvestigationCheckpoint {
@@ -1015,6 +1177,7 @@ function normalizeFinalFinding(
   const input = object(value, "final finding");
   const completed = new Map(
     history
+      .filter(isToolHistoryEntry)
       .filter((entry) => entry.result !== undefined)
       .map((entry) => [entry.callId, entry])
   );
@@ -1091,12 +1254,15 @@ function normalizeFinalFinding(
     status !== "likely" &&
     status !== "inconclusive"
   ) {
-    throw new InvestigationModelError("Finding status is invalid", false);
+    throw new InvestigationModelError(
+      'finding.status is required and must be exactly "confirmed", "likely", or "inconclusive"',
+      false
+    );
   }
   const level = confidence.level;
   if (level !== "high" && level !== "medium" && level !== "low") {
     throw new InvestigationModelError(
-      "Finding confidence level is invalid",
+      'finding.confidence.level is required and must be exactly "high", "medium", or "low"',
       false
     );
   }

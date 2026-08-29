@@ -8,16 +8,20 @@ import type { FinalFinding, InvestigationToolCall } from "./contracts.ts";
 import { D1InvestigationRepository } from "./repository.ts";
 import {
   InvestigationChaosDisabledError,
+  InvestigationModelResponseError,
   InvestigationStartConflictError,
   investigationRunLimits,
+  investigationStallLimits,
+  isToolHistoryEntry,
   prepareInvestigation,
+  reconcileStalledInvestigation,
   resolveInvestigationStart,
   runInvestigation,
   type InvestigationCheckpoint,
-  type InvestigationHistoryEntry,
   type InvestigationModel,
   type InvestigationModelContext,
-  type InvestigationModelDecision
+  type InvestigationModelDecision,
+  type InvestigationToolHistoryEntry
 } from "./runtime.ts";
 import {
   buildAnthropicModelMessages,
@@ -60,7 +64,8 @@ before(
     db = await miniflare.getD1Database("TELEMETRY_DB");
     for (const migrationName of [
       "0001_telemetry.sql",
-      "0002_investigations.sql"
+      "0002_investigations.sql",
+      "0003_interrupt_deliveries.sql"
     ]) {
       const migration = await readFile(
         fileURLToPath(
@@ -397,11 +402,20 @@ test("invalid final findings stop after the bounded retry budget", async () => {
     scope
   });
   let modelCalls = 0;
+  const rejectionsSeen: number[] = [];
   const completed = await runInvestigation(prepared.investigation.id, {
     repository,
     model: {
-      async next() {
+      async next(context) {
         modelCalls += 1;
+        const rejections = context.history.flatMap((entry) =>
+          entry.kind === "rejected_final" ? [entry] : []
+        );
+        rejectionsSeen.push(rejections.length);
+        for (const rejection of rejections) {
+          assert.equal(rejection.responseText, "{}");
+          assert.match(rejection.reason, /finding\.evidence/);
+        }
         return { type: "final", finding: {} };
       }
     },
@@ -412,6 +426,7 @@ test("invalid final findings stop after the bounded retry budget", async () => {
 
   assert.equal(completed.status, "failed");
   assert.equal(modelCalls, investigationRunLimits.maxInvalidFinalAttempts);
+  assert.deepEqual(rejectionsSeen, [0, 1, 2]);
   const failures = completed.events.filter(
     (event) => event.type === "model.failed"
   );
@@ -429,6 +444,135 @@ test("invalid final findings stop after the bounded retry budget", async () => {
     terminalEvent?.type === "investigation.failed" ? terminalEvent.message : "",
     /repeatedly returned an invalid final finding/
   );
+});
+
+test("unparseable final responses feed back as rejections within the same budget", async () => {
+  const prepared = await prepareInvestigation(repository, {
+    idempotencyKey: "unparseable-final-cap",
+    scope
+  });
+  const replayedTexts: string[][] = [];
+  const failed = await runInvestigation(prepared.investigation.id, {
+    repository,
+    model: {
+      async next(context) {
+        replayedTexts.push(
+          context.history.flatMap((entry) =>
+            entry.kind === "rejected_final" ? [entry.responseText] : []
+          )
+        );
+        throw new InvestigationModelResponseError(
+          "The model response was not valid JSON; reply with only the JSON envelope",
+          `prose attempt ${replayedTexts.length}`
+        );
+      }
+    },
+    executeTool: async () => {
+      throw new Error("No tool should run for an unparseable final response");
+    }
+  });
+
+  assert.equal(failed.status, "failed");
+  assert.deepEqual(replayedTexts, [
+    [],
+    ["prose attempt 1"],
+    ["prose attempt 1", "prose attempt 2"]
+  ]);
+  const failures = failed.events.filter(
+    (event) => event.type === "model.failed"
+  );
+  assert.equal(failures.length, investigationRunLimits.maxInvalidFinalAttempts);
+  assert.ok(failures.every((event) => /not valid JSON/.test(event.message)));
+  const terminal = failed.events.at(-1);
+  assert.match(
+    terminal?.type === "investigation.failed" ? terminal.message : "",
+    /repeatedly returned an invalid final finding/
+  );
+});
+
+test("a silent running investigation is resumed, then honestly failed, by reads", async () => {
+  const createdAt = new Date("2026-08-28T10:00:00.000Z");
+  const prepared = await prepareInvestigation(
+    repository,
+    { idempotencyKey: "stall-reconciliation", scope },
+    createdAt
+  );
+  const startedAt = "2026-08-28T10:00:05.000Z";
+  await repository.appendEvent(
+    prepared.investigation.id,
+    "investigation.started",
+    startedAt,
+    { type: "investigation.started", question: scope.question }
+  );
+  await repository.patch(prepared.investigation.id, {
+    status: "running",
+    startedAt
+  });
+
+  const fresh = await reconcileStalledInvestigation(
+    repository,
+    prepared.investigation.id,
+    {
+      now: () => new Date("2026-08-28T10:01:00.000Z"),
+      resume: async () => {
+        throw new Error("A fresh run must not be resumed");
+      }
+    }
+  );
+  assert.equal(fresh?.action, "none");
+  assert.equal(fresh?.investigation.status, "running");
+
+  let resumed = false;
+  const silent = await reconcileStalledInvestigation(
+    repository,
+    prepared.investigation.id,
+    {
+      now: () =>
+        new Date(
+          Date.parse(startedAt) + investigationStallLimits.resumeAfterMs + 1_000
+        ),
+      resume: async () => {
+        resumed = true;
+      }
+    }
+  );
+  assert.equal(silent?.action, "resumed");
+  assert.equal(resumed, true);
+  assert.equal(silent?.investigation.status, "running");
+
+  const dead = await reconcileStalledInvestigation(
+    repository,
+    prepared.investigation.id,
+    {
+      now: () =>
+        new Date(
+          Date.parse(startedAt) + investigationStallLimits.failAfterMs + 60_000
+        ),
+      resume: async () => {
+        throw new Error("A hard-stalled run must be failed, not resumed");
+      }
+    }
+  );
+  assert.equal(dead?.action, "failed");
+  assert.equal(dead?.investigation.status, "failed");
+  const terminal = dead?.investigation.events.at(-1);
+  assert.ok(terminal && terminal.type === "investigation.failed");
+  assert.match(terminal.message, /stalled/);
+  assert.match(terminal.message, /made no progress/);
+  assert.equal(terminal.recoverable, false);
+
+  const afterFailure = await reconcileStalledInvestigation(
+    repository,
+    prepared.investigation.id,
+    {
+      now: () => new Date("2026-08-29T10:00:00.000Z"),
+      resume: async () => {
+        throw new Error("A terminal run must not be resumed");
+      }
+    }
+  );
+  assert.equal(afterFailure?.action, "none");
+  assert.equal(afterFailure?.investigation.status, "failed");
 });
 
 test("stable per-run identities keep a completed run isolated from an active run", async () => {
@@ -740,7 +884,9 @@ test("maximum log evidence stays complete while model context is honestly compac
   const checkpoint = await repository.loadCheckpoint<InvestigationCheckpoint>(
     prepared.investigation.id
   );
-  const persistedResult = checkpoint?.history[0].result as SearchLogsResult;
+  const persistedEntry = checkpoint?.history[0];
+  assert.ok(persistedEntry && isToolHistoryEntry(persistedEntry));
+  const persistedResult = persistedEntry.result as SearchLogsResult;
   assert.equal(persistedResult.rows.length, 100);
   const completion = completed.events.find(
     (event) => event.type === "tool.completed"
@@ -809,11 +955,10 @@ class MaxLogsProjectionModel implements InvestigationModel {
         }
       });
     }
-    assert.equal(
-      (context.history[0].result as SearchLogsResult).rows.length,
-      100
-    );
-    this.projection = projectToolResultForModel(context.history[0]);
+    const first = context.history[0];
+    assert.ok(isToolHistoryEntry(first));
+    assert.equal((first.result as SearchLogsResult).rows.length, 100);
+    this.projection = projectToolResultForModel(first);
     const messages = buildAnthropicModelMessages(context);
     const resultMessage = [...messages]
       .reverse()
@@ -858,9 +1003,9 @@ class EvidenceDrivenFakeModel implements InvestigationModel {
   async next(
     context: InvestigationModelContext
   ): Promise<InvestigationModelDecision> {
-    const completed = context.history.filter(
-      (entry) => entry.result !== undefined
-    );
+    const completed = context.history
+      .filter(isToolHistoryEntry)
+      .filter((entry) => entry.result !== undefined);
     switch (completed.length) {
       case 0:
         return tool("Establish the incident timeline", {
@@ -961,7 +1106,7 @@ function tool(
   return { type: "tool", rationale, call };
 }
 
-function buildFinding(history: InvestigationHistoryEntry[]): FinalFinding {
+function buildFinding(history: InvestigationToolHistoryEntry[]): FinalFinding {
   const overview = history[0].result as QueryMetricsResult;
   const routes = history[1].result as QueryMetricsResult;
   const sessions = history[2].result as QueryMetricsResult;

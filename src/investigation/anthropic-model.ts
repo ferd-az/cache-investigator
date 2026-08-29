@@ -5,13 +5,17 @@ import type {
 import { finalFindingEditorialLimits } from "./finding-editorial.ts";
 import {
   InvestigationModelError,
+  InvestigationModelResponseError,
+  isToolHistoryEntry,
   type InvestigationModel,
   type InvestigationModelContext,
-  type InvestigationModelDecision
+  type InvestigationModelDecision,
+  type InvestigationToolHistoryEntry
 } from "./runtime.ts";
 
 export const investigationModel = "claude-sonnet-5" as const;
 export const investigationMaxOutputTokens = 8_192;
+export const investigationModelRequestTimeoutMs = 120_000;
 
 const anthropicMessagesEndpoint = "https://api.anthropic.com/v1/messages";
 const anthropicApiVersion = "2023-06-01";
@@ -206,11 +210,16 @@ export class AnthropicInvestigationModel implements InvestigationModel {
           "content-type": "application/json",
           "x-api-key": this.apiKey
         },
-        body: JSON.stringify(buildAnthropicModelRequest(context))
+        body: JSON.stringify(buildAnthropicModelRequest(context)),
+        signal: AbortSignal.timeout(investigationModelRequestTimeoutMs)
       });
     } catch (error) {
+      const timedOut =
+        error instanceof DOMException && error.name === "TimeoutError";
       throw new InvestigationModelError(
-        `Anthropic request failed: ${messageOf(error)}`,
+        timedOut
+          ? `Anthropic request timed out after ${investigationModelRequestTimeoutMs}ms`
+          : `Anthropic request failed: ${messageOf(error)}`,
         true
       );
     }
@@ -314,19 +323,21 @@ function decisionFromAnthropicResponse(
     .join("\n")
     .trim();
   if (!text) {
+    const blockTypes = response.content.map((block) => block.type).join(", ");
     throw new InvestigationModelError(
-      "Anthropic returned no tool call or final response text"
+      `Anthropic returned no tool call or final response text (stop_reason: ${response.stop_reason ?? "null"}; content blocks: ${blockTypes || "none"})`
     );
   }
   const parsed = parseJsonResponse(text);
   if (parsed.kind === "final") {
-    return { type: "final", finding: parsed.finding };
+    return { type: "final", finding: parsed.finding, responseText: text };
   }
   if (parsed.kind === "no_findings" && typeof parsed.summary === "string") {
     return { type: "no_findings", summary: parsed.summary };
   }
-  throw new InvestigationModelError(
-    "The model final response did not match the required envelope"
+  throw new InvestigationModelResponseError(
+    "The model final response did not match the required envelope",
+    text
   );
 }
 
@@ -345,6 +356,19 @@ export function buildAnthropicModelMessages(
     }
   ];
   for (const entry of context.history) {
+    if (entry.kind === "rejected_final") {
+      if (entry.responseText.trim().length > 0) {
+        messages.push({
+          role: "assistant",
+          content: [{ type: "text", text: entry.responseText }]
+        });
+      }
+      appendUserText(
+        messages,
+        `Your final response was rejected: ${entry.reason}. Correct that exact problem, keep every other field consistent with the evidence, and reply with only the JSON envelope.`
+      );
+      continue;
+    }
     const projected = projectToolResultForModel(entry);
     const toolUseId = entry.callId.replace(/[^a-zA-Z0-9_-]/g, "_");
     messages.push({
@@ -370,11 +394,26 @@ export function buildAnthropicModelMessages(
       ]
     });
   }
+  if (context.remainingToolCalls === 0) {
+    appendUserText(
+      messages,
+      'The tool-call budget is exhausted; no further tool calls are possible. Reply now with only the final JSON envelope: {"kind":"final","finding":FINAL_FINDING} or {"kind":"no_findings","summary":"..."}.'
+    );
+  }
   return messages;
 }
 
+function appendUserText(messages: AnthropicModelMessage[], text: string) {
+  const last = messages.at(-1);
+  if (last?.role === "user") {
+    last.content.push({ type: "text", text });
+    return;
+  }
+  messages.push({ role: "user", content: [{ type: "text", text }] });
+}
+
 export function projectToolResultForModel(
-  entry: InvestigationModelContext["history"][number]
+  entry: InvestigationToolHistoryEntry
 ): ModelToolResultProjection {
   if (entry.error !== undefined) {
     return {
@@ -427,7 +466,7 @@ export function projectToolResultForModel(
 }
 
 function projectedResult(
-  entry: InvestigationModelContext["history"][number],
+  entry: InvestigationToolHistoryEntry,
   result: Record<string, unknown>,
   collectionKey: string | undefined,
   rows: unknown[],
@@ -461,10 +500,11 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function systemPrompt(context: InvestigationModelContext) {
   const { scope } = context.investigation;
+  const completedToolEntries = context.history
+    .filter(isToolHistoryEntry)
+    .filter((entry) => entry.result !== undefined);
   const completedTools = new Set(
-    context.history
-      .filter((entry) => entry.result !== undefined)
-      .map((entry) => entry.call.tool)
+    completedToolEntries.map((entry) => entry.call.tool)
   );
   const requiredEvidenceTools: InvestigationToolName[] = [
     "query_metrics",
@@ -475,22 +515,11 @@ function systemPrompt(context: InvestigationModelContext) {
   const missingEvidenceTools = requiredEvidenceTools.filter(
     (tool) => !completedTools.has(tool)
   );
-  const botTrafficChecked = context.history.some(
+  const botTrafficChecked = completedToolEntries.some(
     (entry) =>
       entry.call.tool === "query_metrics" &&
-      entry.call.input.filters?.traffic_source === "bot" &&
-      entry.result !== undefined
+      entry.call.input.filters?.traffic_source === "bot"
   );
-  const rejectedFinalMessage = [...(context.investigation.events ?? [])]
-    .reverse()
-    .flatMap((event) =>
-      event.type === "model.failed" &&
-      /^(?:finding\.|Finding |Final finding|Alternative hypothesis)/.test(
-        event.message
-      )
-        ? [event.message]
-        : []
-    )[0];
   return `You are a production cache-regression investigator. Work only from the supplied scope and results returned by the four server tools. Never assume a cause, invent telemetry, or request data outside the scope.
 
 Scope:
@@ -503,19 +532,18 @@ Scope:
 - completed evidence tools: ${[...completedTools].join(", ") || "none"}
 - missing required evidence tools: ${missingEvidenceTools.join(", ") || "none"}
 - bot traffic timing check: ${botTrafficChecked ? "complete" : "pending"}
-- previous rejected final: ${rejectedFinalMessage ?? "none"}
 
-Choose at most one tool per turn. Start with aggregate metrics, localize affected routes and request segments, correlate timing with deployments, inspect structured logs, and check dependencies or transient traffic as alternative explanations. Explicitly assess whether bot or other transient traffic overlaps the regression onset, and carry that timing conclusion into alternativesRuledOut. Use no more than one dedicated query_metrics call for that check, with filters.traffic_source set to "bot", and compare its last elevated bucket to the regression onset. If the bot traffic timing check is complete, do not run another bot-filtered query. You must successfully call all four evidence tools before returning a final finding; if the missing required evidence tools list is non-empty, call one of those tools next instead of finalizing. If remaining tool calls is 0, return a final or no_findings response instead of calling another tool. Keep queries narrow enough to remain under server limits. For search_logs, set an explicit limit of 10 or fewer first and paginate only if needed. Omit optional tool fields when unused; do not send null. Encode integer fields such as limit and status as JSON numbers, not strings. Tool errors are evidence about invalid inputs; correct them on a later turn. Historical tool payloads may include a projection marker; omitted rows remain persisted, so narrow or paginate rather than assuming they do not exist.
+Choose at most one tool per turn. Start with aggregate metrics, localize affected routes and request segments, correlate timing with deployments, inspect structured logs, and check dependencies or transient traffic as alternative explanations. Explicitly assess whether bot or other transient traffic overlaps the regression onset, and carry that timing conclusion into alternativesRuledOut. Use no more than one dedicated query_metrics call for that check, with filters.traffic_source set to "bot", and compare its last elevated bucket to the regression onset. If the bot traffic timing check is complete, do not run another bot-filtered query. You must successfully call all four evidence tools before returning a final finding; if the missing required evidence tools list is non-empty, call one of those tools next instead of finalizing. If remaining tool calls is 0, return a final or no_findings response instead of calling another tool. Keep queries narrow enough to remain under server limits. Every tool window must keep from strictly earlier than to and span at least one interval; never send an inverted or zero-width window. For search_logs, set an explicit limit of 10 or fewer first and paginate only if needed. Omit optional tool fields when unused; do not send null. Encode integer fields such as limit and status as JSON numbers, not strings. Tool errors are evidence about invalid inputs; correct them on a later turn. Historical tool payloads may include a projection marker; omitted rows remain persisted, so narrow or paginate rather than assuming they do not exist.
 
 If check_dependency_health returns no records with availableTargets, retry it once using one returned service and the listed dependency names. Do not repeat the same empty dependency query. Cite the successful dependency result; if no target is available, cite the empty result as an evidence limitation and lower confidence rather than inventing dependency health.
 
-If a previous final was rejected, correct that specific validation error before returning another final. Do not repeat the rejected shape.
+If a final response was rejected, the rejected JSON and its rejection reason appear in the conversation. Correct that exact problem before returning another final; do not repeat the rejected shape.
 
 ${finalFindingEditorialBrief()}
 
-When the evidence is sufficient, return JSON only with this envelope: {"kind":"final","finding":FINAL_FINDING}. Use this exact FINAL_FINDING shape:
+When the evidence is sufficient, reply with only the JSON envelope {"kind":"final","finding":FINAL_FINDING} — no prose before or after it, no code fences. Use this exact FINAL_FINDING shape:
 {"headline":"...","status":"confirmed|likely|inconclusive","summary":"...","impact":{"startedAt":"ISO timestamp","summary":"...","affectedRoutes":["..."],"indicators":[{"label":"...","value":0,"unit":"optional"}]},"rootCause":{"summary":"...","change":"...","mechanism":["..."]},"confidence":{"level":"high|medium|low","score":0.0,"rationale":"..."},"recommendation":{"immediate":"...","verify":"...","followUps":["..."]},"evidence":[{"id":"exact evidenceId","kind":"metric|log|deployment|dependency","title":"...","claim":"...","source":{"callId":"exact callId"},"observedAt":"optional ISO timestamp","window":{"from":"ISO timestamp","to":"ISO timestamp"},"values":[{"label":"...","value":0,"unit":"optional"}]}],"alternativesRuledOut":[{"hypothesis":"...","reason":"...","evidenceIds":["exact evidenceId"]}]}.
-Each evidence item must use an exact evidenceId and source.callId from a completed tool result. Cite metric, log, deployment, and dependency evidence. Rule out at least one plausible alternative. Do not copy a tool result wholesale.
+status must be exactly one of "confirmed", "likely", or "inconclusive", and confidence.level exactly one of "high", "medium", or "low"; any other value is rejected. Each evidence item must use an exact evidenceId and source.callId from a completed tool result. Cite metric, log, deployment, and dependency evidence. Rule out at least one plausible alternative. Do not copy a tool result wholesale.
 
 If bounded evidence genuinely supports no actionable finding, return {"kind":"no_findings","summary":"..."}. Write at most ${finalFindingEditorialLimits.noFindingsSummaryChars} characters across two sentences: what was checked, then what remains unknown or what should be watched.`;
 }
@@ -534,18 +562,22 @@ Every field has one job:
 - summary: a standalone one-sentence synopsis for completion events and compressed surfaces; at most ${limits.summaryChars} characters.
 - rootCause.change: changed behavior only, in one sentence; at most ${limits.rootCauseChangeChars} characters. Name the version or commit only when it helps someone act. Do not describe impact.
 - rootCause.summary: the causal bridge from the change to the failure, in one sentence; at most ${limits.rootCauseSummaryChars} characters. Do not repeat the deployment or impact values.
-- rootCause.mechanism: ${limits.mechanism.min}-${limits.mechanism.max} distinct causal steps, each adding new information.
+- rootCause.mechanism: ${limits.mechanism.min}-${limits.mechanism.max} distinct causal steps, each adding new information; at most ${limits.mechanism.itemChars} characters per step.
 - impact.summary: affected scope and onset only; at most ${limits.impactSummaryChars} characters.
+- impact.affectedRoutes: at most ${limits.affectedRoutes} route paths, each at most ${limits.affectedRouteChars} characters.
 - impact.indicators: ${limits.impactIndicators.min}-${limits.impactIndicators.max} current degraded values that best express harm. Never emit separate before/after indicators; comparisons belong in evidence and charts.
-- recommendation.immediate: one concrete action beginning with an imperative verb. Do not restate the diagnosis.
-- recommendation.verify: measurable recovery thresholds and a sustained observation window.
-- confidence.rationale: why the causal claim deserves its confidence, using the strongest timing, mechanism, and alternative evidence. Do not summarize the incident again.
-- evidence: titles state claims rather than data-source names; each claim contains one distinct piece of proof. Include at most ${limits.evidence.valuesPerItem} representative values per evidence item. Never serialize a time series or copy a tool result into values; the complete receipt is already persisted. Preserve technical depth through the claim and source reference.
-- alternativesRuledOut: explain why each plausible alternative conflicts with the observed timing or telemetry.
+- recommendation.immediate: one concrete action beginning with an imperative verb; at most ${limits.recommendationImmediateChars} characters. Do not restate the diagnosis.
+- recommendation.verify: measurable recovery thresholds and a sustained observation window; at most ${limits.recommendationVerifyChars} characters.
+- recommendation.followUps: at most ${limits.followUps.max} entries, each at most ${limits.followUps.itemChars} characters.
+- confidence.rationale: why the causal claim deserves its confidence, using the strongest timing, mechanism, and alternative evidence, in at most ${limits.confidenceRationaleChars} characters. Do not summarize the incident again.
+- evidence: titles state claims rather than data-source names; each claim contains one distinct piece of proof. Titles at most ${limits.evidence.titleChars} characters, claims at most ${limits.evidence.claimChars} characters, value labels at most ${limits.valueLabelChars} characters. Include at most ${limits.evidence.valuesPerItem} representative values per evidence item. Never serialize a time series or copy a tool result into values; the complete receipt is already persisted. Preserve technical depth through the claim and source reference.
+- alternativesRuledOut: explain why each plausible alternative conflicts with the observed timing or telemetry. Each hypothesis at most ${limits.alternatives.hypothesisChars} characters and each reason at most ${limits.alternatives.reasonChars} characters.
 
 Match causal language to status. For confirmed, use direct language such as "caused" or "broke". For likely, use "likely caused" or "points to". For inconclusive, state the correlation and the missing evidence. Never overstate confidence.
 
-Before returning the JSON, silently edit it once: remove repeated facts, replace machine-generated phrasing with ordinary engineering language, remove details that do not affect diagnosis, confidence, or action, and verify that the overview can be understood in ten seconds while the evidence supports deeper inspection.`;
+Every character budget above is a hard server limit; a single over-budget field rejects the entire finding.
+
+Before returning the JSON, silently edit it once: remove repeated facts, replace machine-generated phrasing with ordinary engineering language, remove details that do not affect diagnosis, confidence, or action, verify every field fits its character budget, and verify that the overview can be understood in ten seconds while the evidence supports deeper inspection.`;
 }
 
 function parseArguments(value: unknown): InvestigationToolCall["input"] {
@@ -575,19 +607,27 @@ function parseArgumentObject(value: unknown): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function parseJsonResponse(value: unknown): Record<string, unknown> {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    return omitNullValues(value) as Record<string, unknown>;
-  }
-  if (typeof value !== "string") {
-    throw new InvestigationModelError(
-      "The model response was neither JSON text nor an object"
-    );
-  }
-  const trimmed = value.trim();
-  const candidate = trimmed.startsWith("```")
+function parseJsonResponse(text: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  const fenceStripped = trimmed.startsWith("```")
     ? trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")
     : trimmed;
+  const embedded = embeddedJsonObject(fenceStripped);
+  for (const candidate of embedded === undefined
+    ? [fenceStripped]
+    : [fenceStripped, embedded]) {
+    const parsed = parseJsonObject(candidate);
+    if (parsed !== undefined) return parsed;
+  }
+  throw new InvestigationModelResponseError(
+    "The model response was not valid JSON; reply with only the JSON envelope",
+    text
+  );
+}
+
+function parseJsonObject(
+  candidate: string
+): Record<string, unknown> | undefined {
   try {
     const parsed = JSON.parse(candidate) as unknown;
     if (
@@ -595,12 +635,20 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
       parsed === null ||
       Array.isArray(parsed)
     ) {
-      throw new Error("not an object");
+      return undefined;
     }
     return omitNullValues(parsed) as Record<string, unknown>;
   } catch {
-    throw new InvestigationModelError("The model response was not valid JSON");
+    return undefined;
   }
+}
+
+function embeddedJsonObject(candidate: string): string | undefined {
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start < 0 || end <= start) return undefined;
+  const embedded = candidate.slice(start, end + 1);
+  return embedded === candidate ? undefined : embedded;
 }
 
 function omitNullValues(value: unknown): unknown {

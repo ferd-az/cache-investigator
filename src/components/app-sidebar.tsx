@@ -33,7 +33,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 alt=""
                 aria-hidden="true"
               />
-              <span className="text-sm font-semibold">watchtower</span>
+              <span className="text-sm font-semibold">Watchtower</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
