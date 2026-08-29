@@ -117,6 +117,28 @@ test("start is stable and rejects idempotency-key scope drift", async () => {
   );
 });
 
+test("persisted runs can be listed as lightweight summaries", async () => {
+  const prepared = await prepareInvestigation(
+    repository,
+    {
+      idempotencyKey: "list-summary",
+      scope
+    },
+    new Date("2026-08-28T12:00:00.000Z")
+  );
+  const summaries = await repository.list();
+  const summary = summaries.find(
+    (candidate) => candidate.id === prepared.investigation.id
+  );
+  assert.ok(summary);
+  assert.equal(summary.status, "queued");
+  assert.equal(summary.scope.service, scope.service);
+  assert.equal(summary.createdAt, "2026-08-28T12:00:00.000Z");
+  assert.equal("events" in summary, false);
+  assert.equal("plan" in summary, false);
+  assert.equal("finding" in summary, false);
+});
+
 test(
   "a resumed multi-step run recovers the cache regression with ordered durable evidence",
   { timeout: 180_000 },

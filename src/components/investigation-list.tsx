@@ -29,6 +29,8 @@ type InvestigationListRowTarget =
     };
 
 export type InvestigationListRow = InvestigationListRowTarget & {
+  /** Stable domain id used for keyed list rendering. */
+  id: string;
   /** Short display id rendered in the mono lane, e.g. "ALM-07", "INV-041". */
   displayId: string;
   status: InvestigationRowStatus;
@@ -62,7 +64,7 @@ export function InvestigationList({
           </div>
           <div className="flex flex-col gap-0.5">
             {group.rows.map((row) => (
-              <InvestigationListItem key={row.displayId} row={row} />
+              <InvestigationListItem key={row.id} row={row} />
             ))}
           </div>
         </section>
@@ -97,21 +99,23 @@ function InvestigationListItemContent({ row }: { row: InvestigationListRow }) {
   return (
     <>
       <div className="flex min-w-0 items-center gap-2.5">
-        <div className="flex w-[76px] shrink-0 items-center gap-2.5">
+        <div className="flex w-[104px] shrink-0 items-center gap-2.5">
           <StatusGlyph status={row.status} />
-          <span className="font-mono text-xs text-muted-foreground">
+          <span className="font-mono text-xs whitespace-nowrap text-muted-foreground">
             {row.displayId}
           </span>
         </div>
         {row.to ? (
           <Link
-            className="truncate text-sm text-foreground outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset"
+            className="truncate text-sm font-medium text-foreground outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset"
             to={row.to}
           >
             {row.title}
           </Link>
         ) : (
-          <span className="truncate text-sm text-foreground">{row.title}</span>
+          <span className="truncate text-sm font-medium text-foreground">
+            {row.title}
+          </span>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-3">
@@ -140,12 +144,20 @@ const glyphIcon: Record<InvestigationRowStatus, typeof Alert02Icon> = {
   failed: CancelCircleIcon
 };
 
+const glyphLabel: Record<InvestigationRowStatus, string> = {
+  attention: "Needs attention",
+  running: "Investigating",
+  completed: "Completed",
+  no_findings: "No findings",
+  failed: "Failed"
+};
+
 function StatusGlyph({ status }: { status: InvestigationRowStatus }) {
   return (
     <span
-      aria-hidden="true"
       className={`flex w-3.5 shrink-0 justify-center ${glyphColor[status]}`}
     >
+      <span className="sr-only">{glyphLabel[status]}: </span>
       <HugeiconsIcon
         className={
           status === "running"
@@ -155,6 +167,7 @@ function StatusGlyph({ status }: { status: InvestigationRowStatus }) {
         icon={glyphIcon[status]}
         size={14}
         strokeWidth={1.6}
+        aria-hidden="true"
       />
     </span>
   );

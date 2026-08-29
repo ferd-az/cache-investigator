@@ -296,6 +296,20 @@ export type Investigation = {
   finding?: FinalFinding;
 };
 
+export type InvestigationSummary = Pick<
+  Investigation,
+  | "id"
+  | "title"
+  | "status"
+  | "trigger"
+  | "scope"
+  | "createdAt"
+  | "startedAt"
+  | "completedAt"
+> & {
+  confidence?: FinalFinding["confidence"];
+};
+
 export type InvestigationAgentState = {
   investigation: Investigation | null;
 };

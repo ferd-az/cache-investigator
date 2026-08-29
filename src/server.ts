@@ -117,6 +117,13 @@ export default {
   async fetch(request: Request, env: Env) {
     const url = new URL(request.url);
     try {
+      if (request.method === "GET" && url.pathname === "/api/investigations") {
+        const investigations = await new D1InvestigationRepository(
+          env.TELEMETRY_DB
+        ).list();
+        return Response.json({ investigations });
+      }
+
       if (request.method === "POST" && url.pathname === "/api/investigations") {
         const requestedChaos = url.searchParams.get("chaos");
         const body = await request.json();

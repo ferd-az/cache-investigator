@@ -6,6 +6,7 @@ import type {
   InvestigationPlanStep,
   InvestigationScope,
   InvestigationStatus,
+  InvestigationSummary,
   InvestigationTrigger
 } from "./contracts.ts";
 
@@ -38,6 +39,7 @@ export interface InvestigationRepository {
   create(seed: InvestigationSeed): Promise<Investigation>;
   get(id: string): Promise<Investigation | null>;
   getByIdempotencyKey(key: string): Promise<Investigation | null>;
+  list(): Promise<InvestigationSummary[]>;
   appendEvent(
     investigationId: string,
     operationKey: string,
@@ -64,6 +66,19 @@ type InvestigationRow = {
   finding_json: string | null;
   checkpoint_json: string | null;
 };
+
+type InvestigationSummaryRow = Pick<
+  InvestigationRow,
+  | "id"
+  | "title"
+  | "status"
+  | "trigger_json"
+  | "scope_json"
+  | "created_at"
+  | "started_at"
+  | "completed_at"
+  | "finding_json"
+>;
 
 type EventRow = {
   id: string;
@@ -119,6 +134,19 @@ export class D1InvestigationRepository implements InvestigationRepository {
       .bind(key)
       .first<InvestigationRow>();
     return row ? this.hydrate(row) : null;
+  }
+
+  async list(): Promise<InvestigationSummary[]> {
+    const rows = await this.db
+      .prepare(
+        `SELECT
+          id, title, status, trigger_json, scope_json, created_at,
+          started_at, completed_at, finding_json
+        FROM investigations
+        ORDER BY created_at DESC`
+      )
+      .all<InvestigationSummaryRow>();
+    return rows.results.map(toSummary);
   }
 
   async appendEvent(
@@ -250,4 +278,22 @@ function toEvent(row: EventRow): InvestigationEvent {
     at: row.at,
     ...(JSON.parse(row.payload_json) as InvestigationEventBody)
   } as InvestigationEvent;
+}
+
+function toSummary(row: InvestigationSummaryRow): InvestigationSummary {
+  const finding = row.finding_json
+    ? (JSON.parse(row.finding_json) as FinalFinding)
+    : undefined;
+
+  return {
+    id: row.id,
+    title: row.title,
+    status: row.status,
+    trigger: JSON.parse(row.trigger_json) as InvestigationTrigger,
+    scope: JSON.parse(row.scope_json) as InvestigationScope,
+    createdAt: row.created_at,
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    ...(finding ? { confidence: finding.confidence } : {})
+  };
 }

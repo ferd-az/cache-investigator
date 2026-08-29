@@ -3,9 +3,13 @@ import {
   type InvestigationListRow
 } from "@/components/investigation-list";
 import { completedCacheKeyRegression } from "@/fixtures/cache-key-regression";
-import type { Investigation } from "@/investigation/contracts";
+import type {
+  Investigation,
+  InvestigationStatus,
+  InvestigationSummary
+} from "@/investigation/contracts";
 import type { StartInvestigationInput } from "@/investigation/runtime";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 export const unresolvedInvestigation = {
@@ -50,6 +54,8 @@ const hourMinute = new Intl.DateTimeFormat("en", {
   timeZone: "UTC"
 });
 
+const LIST_REFRESH_INTERVAL_MS = 2_500;
+
 export function InvestigationsPage() {
   const navigate = useNavigate();
   const idempotencyKey = useRef(
@@ -60,9 +66,62 @@ export function InvestigationsPage() {
     | { status: "starting" }
     | { status: "error"; message: string }
   >({ status: "idle" });
+  const [runList, setRunList] = useState<{
+    investigations: InvestigationSummary[];
+    error: string | null;
+  }>({ investigations: [], error: null });
   const completed = completedCacheKeyRegression;
-  const finding = completed.finding!;
   const isStarting = startState.status === "starting";
+
+  useEffect(() => {
+    let cancelled = false;
+    let refreshTimer: number | undefined;
+    let controller: AbortController | undefined;
+
+    async function refreshInvestigations() {
+      controller = new AbortController();
+
+      try {
+        const response = await fetch("/api/investigations", {
+          headers: { Accept: "application/json" },
+          signal: controller.signal
+        });
+        const value: unknown = await response.json();
+        if (!response.ok) throw new Error(responseError(value));
+
+        const investigations = responseInvestigations(value);
+        if (!investigations) {
+          throw new Error("The investigation list returned invalid data.");
+        }
+        if (!cancelled) {
+          setRunList({ investigations, error: null });
+        }
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError")
+          return;
+        if (!cancelled) {
+          setRunList((current) => ({
+            ...current,
+            error: "Saved investigations could not be refreshed."
+          }));
+        }
+      } finally {
+        if (!cancelled) {
+          refreshTimer = window.setTimeout(
+            refreshInvestigations,
+            LIST_REFRESH_INTERVAL_MS
+          );
+        }
+      }
+    }
+
+    void refreshInvestigations();
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      if (refreshTimer !== undefined) window.clearTimeout(refreshTimer);
+    };
+  }, []);
 
   async function startAlarmInvestigation() {
     if (isStarting) return;
@@ -107,8 +166,9 @@ export function InvestigationsPage() {
 
   const alarmRows: InvestigationListRow[] = [
     {
+      id: unresolvedInvestigation.id,
       displayId: "ALM-07",
-      status: isStarting ? "running" : "attention",
+      status: "attention",
       title: unresolvedInvestigation.title,
       lanes: (
         <>
@@ -132,6 +192,7 @@ export function InvestigationsPage() {
   ];
 
   const completedRow: InvestigationListRow = {
+    id: completed.id,
     displayId: "INV-041",
     status: "completed",
     title: completed.title,
@@ -139,9 +200,6 @@ export function InvestigationsPage() {
       <>
         <span className="text-xs text-muted-foreground">
           {completed.scope.service}
-        </span>
-        <span className="font-mono text-xs text-emerald-600">
-          {Math.round(finding.confidence.score * 100)}%
         </span>
         <span className="font-mono text-xs text-muted-foreground">
           {durationBetween(completed.startedAt!, completed.completedAt!)}
@@ -151,15 +209,36 @@ export function InvestigationsPage() {
     timestamp: monthDay.format(new Date(completed.completedAt!)),
     to: `/i/${completed.id}`
   };
+  const persistedRuns = runList.investigations.filter(
+    (investigation) =>
+      investigation.id !== completed.id &&
+      investigation.id !== unresolvedInvestigation.id
+  );
+  const inProgressRows = persistedRuns
+    .filter(
+      (investigation) =>
+        investigation.status === "queued" || investigation.status === "running"
+    )
+    .map(toInvestigationRow);
+  const terminalRows = persistedRuns
+    .filter(
+      (investigation) =>
+        investigation.status === "completed" ||
+        investigation.status === "no_findings" ||
+        investigation.status === "failed"
+    )
+    .map(toInvestigationRow);
+  const groups = [
+    { label: "Needs attention", rows: alarmRows },
+    ...(inProgressRows.length
+      ? [{ label: "In progress", rows: inProgressRows }]
+      : []),
+    { label: "Completed", rows: [...terminalRows, completedRow] }
+  ];
 
   return (
     <div className="flex flex-col gap-3">
-      <InvestigationList
-        groups={[
-          { label: "Needs attention", rows: alarmRows },
-          { label: "Completed", rows: [completedRow] }
-        ]}
-      />
+      <InvestigationList groups={groups} />
       {startState.status === "error" ? (
         <p
           className="px-6 text-sm text-destructive"
@@ -169,8 +248,67 @@ export function InvestigationsPage() {
           {startState.message}
         </p>
       ) : null}
+      {runList.error ? (
+        <p
+          className="px-6 text-sm text-destructive"
+          role="alert"
+          aria-live="polite"
+        >
+          {runList.error}
+        </p>
+      ) : null}
     </div>
   );
+}
+
+function toInvestigationRow(
+  investigation: InvestigationSummary
+): InvestigationListRow {
+  const duration =
+    investigation.startedAt === undefined
+      ? null
+      : durationBetween(
+          investigation.startedAt,
+          investigation.completedAt ?? new Date().toISOString()
+        );
+
+  return {
+    id: investigation.id,
+    displayId: displayInvestigationId(investigation.id),
+    status:
+      investigation.status === "queued" ? "running" : investigation.status,
+    title: investigation.title,
+    lanes: (
+      <>
+        <span className="text-xs text-muted-foreground">
+          {investigation.scope.service}
+        </span>
+        {duration ? (
+          <span className="font-mono text-xs text-muted-foreground">
+            {duration}
+          </span>
+        ) : null}
+      </>
+    ),
+    timestamp: formatListTimestamp(
+      investigation.completedAt ?? investigation.createdAt
+    ),
+    to: `/i/${encodeURIComponent(investigation.id)}`
+  };
+}
+
+function displayInvestigationId(id: string) {
+  return `INV-${id.replace(/^inv_/, "").slice(0, 6).toUpperCase()}`;
+}
+
+function formatListTimestamp(value: string) {
+  const date = new Date(value);
+  const now = new Date();
+  const isToday =
+    date.getUTCFullYear() === now.getUTCFullYear() &&
+    date.getUTCMonth() === now.getUTCMonth() &&
+    date.getUTCDate() === now.getUTCDate();
+  return isToday ? hourMinute.format(date) : monthDay.format(date);
 }
 
 function durationBetween(start: string, end: string) {
@@ -197,6 +335,46 @@ function responseInvestigation(value: unknown): Investigation | null {
     return null;
   }
   return investigation as Investigation;
+}
+
+function responseInvestigations(value: unknown): InvestigationSummary[] | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    !("investigations" in value) ||
+    !Array.isArray(value.investigations) ||
+    !value.investigations.every(isInvestigationSummary)
+  ) {
+    return null;
+  }
+  return value.investigations;
+}
+
+function isInvestigationSummary(value: unknown): value is InvestigationSummary {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Partial<InvestigationSummary>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.title === "string" &&
+    isInvestigationStatus(candidate.status) &&
+    typeof candidate.createdAt === "string" &&
+    typeof candidate.scope === "object" &&
+    candidate.scope !== null &&
+    typeof candidate.scope.service === "string"
+  );
+}
+
+function isInvestigationStatus(value: unknown): value is InvestigationStatus {
+  return (
+    value === "queued" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "no_findings" ||
+    value === "failed"
+  );
 }
 
 function responseError(value: unknown) {
