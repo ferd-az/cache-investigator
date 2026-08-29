@@ -91,6 +91,7 @@ export type InvestigationCheckpoint = {
   turn: number;
   toolCalls: number;
   modelFailures: number;
+  invalidFinalAttempts: number;
   history: InvestigationHistoryEntry[];
   chaos: {
     mode: InvestigationChaosMode;
@@ -187,10 +188,16 @@ export async function runInvestigation(
   );
   if (isTerminal(investigation.status)) return investigation;
 
-  let checkpoint =
-    (await options.repository.loadCheckpoint<InvestigationCheckpoint>(
+  const loadedCheckpoint =
+    await options.repository.loadCheckpoint<InvestigationCheckpoint>(
       investigationId
-    )) ?? initialCheckpoint(investigation.configuration.chaos);
+    );
+  let checkpoint = loadedCheckpoint
+    ? {
+        ...loadedCheckpoint,
+        invalidFinalAttempts: loadedCheckpoint.invalidFinalAttempts ?? 0
+      }
+    : initialCheckpoint(investigation.configuration.chaos);
 
   if (investigation.status === "queued") {
     const startedAt = now().toISOString();
@@ -248,16 +255,15 @@ export async function runInvestigation(
           now
         );
       } catch (error) {
-        checkpoint = await recordModelFailure(
+        checkpoint = await recordInvalidFinal(
           investigation,
           checkpoint,
           messageOf(error),
-          false,
           options,
           now
         );
         if (
-          checkpoint.modelFailures >=
+          checkpoint.invalidFinalAttempts >=
           investigationRunLimits.maxInvalidFinalAttempts
         ) {
           return failInvestigation(
@@ -338,6 +344,8 @@ export async function runInvestigation(
       ...checkpoint,
       turn,
       modelFailures: 0,
+      invalidFinalAttempts:
+        decision.type === "tool" ? 0 : checkpoint.invalidFinalAttempts,
       pending:
         decision.type === "tool"
           ? {
@@ -598,6 +606,38 @@ async function recordModelFailure(
     }
   );
   const next = { ...checkpoint, modelFailures: attempt };
+  delete next.pending;
+  await saveCheckpoint(options, investigation.id, next);
+  return next;
+}
+
+async function recordInvalidFinal(
+  investigation: Investigation,
+  checkpoint: InvestigationCheckpoint,
+  message: string,
+  options: InvestigationRunnerOptions,
+  now: () => Date
+): Promise<InvestigationCheckpoint> {
+  const attempt = checkpoint.invalidFinalAttempts + 1;
+  const retryable = attempt < investigationRunLimits.maxInvalidFinalAttempts;
+  await emit(
+    options,
+    investigation.id,
+    `model.invalid-final:${checkpoint.turn}:${attempt}`,
+    now(),
+    {
+      type: "model.failed",
+      turn: checkpoint.turn,
+      message,
+      attempt,
+      retryable
+    }
+  );
+  const next = {
+    ...checkpoint,
+    modelFailures: 0,
+    invalidFinalAttempts: attempt
+  };
   delete next.pending;
   await saveCheckpoint(options, investigation.id, next);
   return next;
@@ -883,6 +923,7 @@ function initialCheckpoint(
     turn: 0,
     toolCalls: 0,
     modelFailures: 0,
+    invalidFinalAttempts: 0,
     history: [],
     chaos: {
       mode,

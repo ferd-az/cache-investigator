@@ -8,9 +8,11 @@ import {
   SquareTerminalIcon
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { useAgent } from "agents/react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
+import { LiveInvestigation } from "../components/live-investigation";
 import {
   InvestigationSequenceNav,
   investigationSequenceSections,
@@ -23,6 +25,7 @@ import { completedCacheKeyRegression } from "../fixtures/cache-key-regression";
 import type {
   FindingEvidence,
   Investigation,
+  InvestigationAgentState,
   InvestigationEvent
 } from "../investigation/contracts";
 import { getInvestigationSignalData } from "../investigation/signal-data";
@@ -91,7 +94,93 @@ export function InvestigationDetailPage() {
     return <CompletedDetail investigation={completedCacheKeyRegression} />;
   }
 
-  return <InvestigationNotFound />;
+  return <PersistedInvestigationDetail id={id} />;
+}
+
+function PersistedInvestigationDetail({ id }: { id: string }) {
+  const agent = useAgent<InvestigationAgentState>({
+    agent: "InvestigationAgent",
+    name: id
+  });
+  const [loadState, setLoadState] = useState<
+    | { status: "loading" }
+    | { status: "loaded"; investigation: Investigation }
+    | { status: "not-found" }
+    | { status: "error" }
+  >({ status: "loading" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setLoadState({ status: "loading" });
+
+    async function loadInvestigation() {
+      try {
+        const response = await fetch(
+          `/api/investigations/${encodeURIComponent(id)}`,
+          {
+            headers: { Accept: "application/json" },
+            signal: controller.signal
+          }
+        );
+        if (response.status === 404) {
+          setLoadState({ status: "not-found" });
+          return;
+        }
+        if (!response.ok) {
+          setLoadState({ status: "error" });
+          return;
+        }
+
+        const value: unknown = await response.json();
+        if (!isInvestigation(value) || value.id !== id) {
+          setLoadState({ status: "error" });
+          return;
+        }
+        setLoadState({ status: "loaded", investigation: value });
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError")
+          return;
+        setLoadState({ status: "error" });
+      }
+    }
+
+    void loadInvestigation();
+    return () => controller.abort();
+  }, [id]);
+
+  const hydratedInvestigation =
+    loadState.status === "loaded" ? loadState.investigation : null;
+  const agentInvestigation =
+    agent.state?.investigation?.id === id ? agent.state.investigation : null;
+  const investigation = freshestInvestigation(
+    hydratedInvestigation,
+    agentInvestigation
+  );
+
+  if (investigation) {
+    if (investigation.status === "completed" && investigation.finding) {
+      return <CompletedDetail investigation={investigation} />;
+    }
+    return <LiveInvestigation investigation={investigation} />;
+  }
+
+  if (loadState.status === "not-found") return <InvestigationNotFound />;
+
+  if (loadState.status === "error" || agent.connectionError) {
+    return (
+      <DetailStateMessage
+        title="Investigation unavailable"
+        detail="The persisted investigation could not be loaded."
+      />
+    );
+  }
+
+  return (
+    <DetailStateMessage
+      title="Loading investigation"
+      detail="Reconnecting to persisted investigation state."
+    />
+  );
 }
 
 function InvestigationNotFound() {
@@ -107,6 +196,21 @@ function InvestigationNotFound() {
         />{" "}
         Back to investigations
       </Link>
+    </div>
+  );
+}
+
+function DetailStateMessage({
+  title,
+  detail
+}: {
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-2 px-5 py-12 sm:px-7 xl:px-12">
+      <h1 className="text-xl font-medium text-foreground">{title}</h1>
+      <p className="text-sm text-muted-foreground">{detail}</p>
     </div>
   );
 }
@@ -979,6 +1083,50 @@ function eventLabel(event: InvestigationEvent) {
     case "investigation.failed":
       return event.message;
   }
+}
+
+function freshestInvestigation(
+  hydrated: Investigation | null,
+  agent: Investigation | null
+) {
+  if (!hydrated) return agent;
+  if (!agent) return hydrated;
+
+  const hydratedSequence = hydrated.events.at(-1)?.sequence ?? 0;
+  const agentSequence = agent.events.at(-1)?.sequence ?? 0;
+  if (hydratedSequence !== agentSequence) {
+    return hydratedSequence > agentSequence ? hydrated : agent;
+  }
+  if (Boolean(hydrated.finding) !== Boolean(agent.finding)) {
+    return hydrated.finding ? hydrated : agent;
+  }
+
+  const statusRank: Record<Investigation["status"], number> = {
+    queued: 0,
+    running: 1,
+    completed: 2,
+    no_findings: 2,
+    failed: 2
+  };
+  return statusRank[hydrated.status] > statusRank[agent.status]
+    ? hydrated
+    : agent;
+}
+
+function isInvestigation(value: unknown): value is Investigation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Partial<Investigation>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.title === "string" &&
+    typeof candidate.status === "string" &&
+    typeof candidate.scope === "object" &&
+    candidate.scope !== null &&
+    Array.isArray(candidate.plan) &&
+    Array.isArray(candidate.events)
+  );
 }
 
 function formatDate(value: string) {

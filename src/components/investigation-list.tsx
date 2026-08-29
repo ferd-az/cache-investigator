@@ -16,7 +16,19 @@ export type InvestigationRowStatus =
   | "no_findings"
   | "failed";
 
-export interface InvestigationListRow {
+type InvestigationListRowTarget =
+  | {
+      to: string;
+      onSelect?: never;
+      pending?: never;
+    }
+  | {
+      to?: never;
+      onSelect: () => void;
+      pending?: boolean;
+    };
+
+export type InvestigationListRow = InvestigationListRowTarget & {
   /** Short display id rendered in the mono lane, e.g. "ALM-07", "INV-041". */
   displayId: string;
   status: InvestigationRowStatus;
@@ -24,8 +36,7 @@ export interface InvestigationListRow {
   /** Right-aligned lanes (service, key stat, confidence, duration). */
   lanes?: ReactNode;
   timestamp: string;
-  to: string;
-}
+};
 
 export interface InvestigationListGroup {
   label: string;
@@ -61,8 +72,30 @@ export function InvestigationList({
 }
 
 function InvestigationListItem({ row }: { row: InvestigationListRow }) {
+  if (row.onSelect) {
+    return (
+      <button
+        className="flex w-full items-center justify-between gap-3 rounded-md p-4 text-left outline-none hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-wait disabled:opacity-70"
+        aria-busy={row.pending}
+        disabled={row.pending}
+        onClick={row.onSelect}
+        type="button"
+      >
+        <InvestigationListItemContent row={row} />
+      </button>
+    );
+  }
+
   return (
     <div className="relative flex items-center justify-between gap-3 rounded-md p-4 hover:bg-muted/40">
+      <InvestigationListItemContent row={row} />
+    </div>
+  );
+}
+
+function InvestigationListItemContent({ row }: { row: InvestigationListRow }) {
+  return (
+    <>
       <div className="flex min-w-0 items-center gap-2.5">
         <div className="flex w-[76px] shrink-0 items-center gap-2.5">
           <StatusGlyph status={row.status} />
@@ -70,12 +103,16 @@ function InvestigationListItem({ row }: { row: InvestigationListRow }) {
             {row.displayId}
           </span>
         </div>
-        <Link
-          className="truncate text-sm text-foreground outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset"
-          to={row.to}
-        >
-          {row.title}
-        </Link>
+        {row.to ? (
+          <Link
+            className="truncate text-sm text-foreground outline-none after:absolute after:inset-0 after:rounded-md focus-visible:after:ring-2 focus-visible:after:ring-ring focus-visible:after:ring-inset"
+            to={row.to}
+          >
+            {row.title}
+          </Link>
+        ) : (
+          <span className="truncate text-sm text-foreground">{row.title}</span>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-3">
         {row.lanes}
@@ -83,7 +120,7 @@ function InvestigationListItem({ row }: { row: InvestigationListRow }) {
           {row.timestamp}
         </span>
       </div>
-    </div>
+    </>
   );
 }
 

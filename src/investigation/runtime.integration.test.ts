@@ -9,6 +9,7 @@ import { D1InvestigationRepository } from "./repository.ts";
 import {
   InvestigationChaosDisabledError,
   InvestigationStartConflictError,
+  investigationRunLimits,
   prepareInvestigation,
   resolveInvestigationStart,
   runInvestigation,
@@ -284,6 +285,7 @@ test("the server-owned turn budget terminates a resumed over-budget run", async 
     turn: 14,
     toolCalls: 0,
     modelFailures: 0,
+    invalidFinalAttempts: 0,
     history: [],
     chaos: {
       mode: "none",
@@ -308,6 +310,46 @@ test("the server-owned turn budget terminates a resumed over-budget run", async 
   assert.match(
     terminalEvent?.type === "investigation.failed" ? terminalEvent.message : "",
     /14-turn limit/
+  );
+});
+
+test("invalid final findings stop after the bounded retry budget", async () => {
+  const prepared = await prepareInvestigation(repository, {
+    idempotencyKey: "invalid-final-cap",
+    scope
+  });
+  let modelCalls = 0;
+  const completed = await runInvestigation(prepared.investigation.id, {
+    repository,
+    model: {
+      async next() {
+        modelCalls += 1;
+        return { type: "final", finding: {} };
+      }
+    },
+    executeTool: async () => {
+      throw new Error("No tool should run for an invalid final finding");
+    }
+  });
+
+  assert.equal(completed.status, "failed");
+  assert.equal(modelCalls, investigationRunLimits.maxInvalidFinalAttempts);
+  const failures = completed.events.filter(
+    (event) => event.type === "model.failed"
+  );
+  assert.equal(failures.length, investigationRunLimits.maxInvalidFinalAttempts);
+  assert.deepEqual(
+    failures.map((event) => event.attempt),
+    [1, 2, 3]
+  );
+  assert.deepEqual(
+    failures.map((event) => event.retryable),
+    [true, true, false]
+  );
+  const terminalEvent = completed.events.at(-1);
+  assert.match(
+    terminalEvent?.type === "investigation.failed" ? terminalEvent.message : "",
+    /repeatedly returned an invalid final finding/
   );
 });
 
