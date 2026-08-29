@@ -29,7 +29,13 @@ export type InvestigationTrigger = {
   label: string;
 };
 
-export type InvestigationChaosMode = "none" | "step6" | "slow";
+export type InvestigationChaosMode =
+  | "none"
+  | "step6"
+  | "slow"
+  | "fatal"
+  | "no-findings"
+  | "invalid-final";
 
 export type InvestigationConfiguration = {
   chaos: InvestigationChaosMode;

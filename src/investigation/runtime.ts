@@ -307,42 +307,55 @@ export async function runInvestigation(
     }
 
     let decision: InvestigationModelDecision;
-    try {
-      decision = await options.model.next({
-        investigation,
-        history: checkpoint.history,
-        turn: checkpoint.turn + 1,
-        remainingToolCalls:
-          investigationRunLimits.maxToolCalls - checkpoint.toolCalls
-      });
-    } catch (error) {
-      const modelError =
-        error instanceof InvestigationModelError
-          ? error
-          : new InvestigationModelError(messageOf(error));
-      checkpoint = await recordModelFailure(
-        investigation,
-        checkpoint,
-        modelError.message,
-        modelError.retryable,
-        options,
-        now
-      );
-      if (
-        !modelError.retryable ||
-        checkpoint.modelFailures >=
-          investigationRunLimits.maxModelAttemptsPerTurn
-      ) {
-        return failInvestigation(
+    if (checkpoint.chaos.mode === "no-findings" && checkpoint.toolCalls >= 3) {
+      decision = {
+        type: "no_findings",
+        summary:
+          "The selected window contains no actionable cache regression. The completed checks remain available for review."
+      };
+    } else if (
+      checkpoint.chaos.mode === "invalid-final" &&
+      checkpoint.toolCalls >= 3
+    ) {
+      decision = { type: "final", finding: {} };
+    } else {
+      try {
+        decision = await options.model.next({
           investigation,
-          `Model execution failed: ${modelError.message}`,
-          modelError.retryable,
+          history: checkpoint.history,
+          turn: checkpoint.turn + 1,
+          remainingToolCalls:
+            investigationRunLimits.maxToolCalls - checkpoint.toolCalls
+        });
+      } catch (error) {
+        const modelError =
+          error instanceof InvestigationModelError
+            ? error
+            : new InvestigationModelError(messageOf(error));
+        checkpoint = await recordModelFailure(
+          investigation,
           checkpoint,
+          modelError.message,
+          modelError.retryable,
           options,
           now
         );
+        if (
+          !modelError.retryable ||
+          checkpoint.modelFailures >=
+            investigationRunLimits.maxModelAttemptsPerTurn
+        ) {
+          return failInvestigation(
+            investigation,
+            `Model execution failed: ${modelError.message}`,
+            modelError.retryable,
+            checkpoint,
+            options,
+            now
+          );
+        }
+        continue;
       }
-      continue;
     }
 
     const turn = checkpoint.turn + 1;
@@ -426,6 +439,48 @@ async function executePendingTool(
       pending: { ...pending, attempt: pending.attempt + 1 }
     };
     await saveCheckpoint(options, investigation.id, next);
+    return next;
+  }
+
+  if (checkpoint.chaos.mode === "fatal" && checkpoint.toolCalls === 3) {
+    const message =
+      "The telemetry source became unavailable during the investigation";
+    await emit(
+      options,
+      investigation.id,
+      `tool.failed:${pending.callId}:chaos-fatal`,
+      now(),
+      {
+        type: "tool.failed",
+        callId: pending.callId,
+        message,
+        durationMs: Math.max(0, now().getTime() - started.getTime()),
+        attempt: pending.attempt,
+        retryable: false
+      }
+    );
+    const next: InvestigationCheckpoint = {
+      ...checkpoint,
+      toolCalls: checkpoint.toolCalls + 1,
+      history: [
+        ...checkpoint.history,
+        {
+          callId: pending.callId,
+          evidenceId: pending.evidenceId,
+          call: pending.call,
+          error: message
+        }
+      ]
+    };
+    delete next.pending;
+    await failInvestigation(
+      investigation,
+      "Investigation stopped after a required telemetry source became unavailable",
+      false,
+      next,
+      options,
+      now
+    );
     return next;
   }
 
@@ -853,8 +908,17 @@ function parseStartInput(
     );
   }
   const chaos = input.chaos ?? "none";
-  if (chaos !== "none" && chaos !== "step6" && chaos !== "slow") {
-    throw new InvestigationToolInputError("chaos must be none, step6, or slow");
+  if (
+    chaos !== "none" &&
+    chaos !== "step6" &&
+    chaos !== "slow" &&
+    chaos !== "fatal" &&
+    chaos !== "no-findings" &&
+    chaos !== "invalid-final"
+  ) {
+    throw new InvestigationToolInputError(
+      "chaos must be none, step6, slow, fatal, no-findings, or invalid-final"
+    );
   }
   if (chaos !== "none" && !allowChaos) {
     throw new InvestigationChaosDisabledError(

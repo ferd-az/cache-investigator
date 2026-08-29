@@ -477,6 +477,113 @@ test("stable per-run identities keep a completed run isolated from an active run
   assert.notEqual(completed?.events.length, active?.events.length);
 });
 
+test("fatal chaos preserves partial work and ends with an honest failure", async () => {
+  const prepared = await prepareInvestigation(
+    repository,
+    { idempotencyKey: "chaos-fatal", scope, chaos: "fatal" },
+    new Date(),
+    { allowChaos: true }
+  );
+  const failed = await runInvestigation(prepared.investigation.id, {
+    repository,
+    model: new EvidenceDrivenFakeModel(),
+    executeTool: (call) => executeInvestigationTool(db, call)
+  });
+
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.configuration.chaos, "fatal");
+  assert.equal(
+    failed.events.filter((event) => event.type === "tool.completed").length,
+    3
+  );
+  const toolFailure = failed.events.find(
+    (event) =>
+      event.type === "tool.failed" &&
+      event.message.includes("telemetry source became unavailable")
+  );
+  assert.ok(toolFailure && toolFailure.type === "tool.failed");
+  assert.equal(toolFailure.retryable, false);
+  const terminal = failed.events.at(-1);
+  assert.match(
+    terminal?.type === "investigation.failed" ? terminal.message : "",
+    /stopped after a required telemetry source became unavailable/
+  );
+});
+
+test("no-findings chaos ends deterministically after persisted checks", async () => {
+  const prepared = await prepareInvestigation(
+    repository,
+    {
+      idempotencyKey: "chaos-no-findings",
+      scope,
+      chaos: "no-findings"
+    },
+    new Date(),
+    { allowChaos: true }
+  );
+  const model = new EvidenceDrivenFakeModel();
+  const completed = await runInvestigation(prepared.investigation.id, {
+    repository,
+    model,
+    executeTool: (call) => executeInvestigationTool(db, call)
+  });
+
+  assert.equal(completed.status, "no_findings");
+  assert.equal(completed.configuration.chaos, "no-findings");
+  assert.equal(model.finalFindingAttempts, 0);
+  assert.equal(
+    completed.events.filter((event) => event.type === "tool.completed").length,
+    3
+  );
+  const terminal = completed.events.at(-1);
+  assert.match(
+    terminal?.type === "investigation.no_findings" ? terminal.summary : "",
+    /no actionable cache regression/
+  );
+});
+
+test("invalid-final chaos deterministically exhausts final validation", async () => {
+  const prepared = await prepareInvestigation(
+    repository,
+    {
+      idempotencyKey: "chaos-invalid-final",
+      scope,
+      chaos: "invalid-final"
+    },
+    new Date(),
+    { allowChaos: true }
+  );
+  const model = new EvidenceDrivenFakeModel();
+  const failed = await runInvestigation(prepared.investigation.id, {
+    repository,
+    model,
+    executeTool: (call) => executeInvestigationTool(db, call)
+  });
+
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.configuration.chaos, "invalid-final");
+  assert.equal(model.finalFindingAttempts, 0);
+  assert.equal(
+    failed.events.filter((event) => event.type === "tool.completed").length,
+    3
+  );
+  const rejectedFinals = failed.events.filter(
+    (event) => event.type === "model.failed"
+  );
+  assert.equal(
+    rejectedFinals.length,
+    investigationRunLimits.maxInvalidFinalAttempts
+  );
+  assert.ok(
+    rejectedFinals.every((event) => /finding\.evidence/.test(event.message))
+  );
+  const terminal = failed.events.at(-1);
+  assert.match(
+    terminal?.type === "investigation.failed" ? terminal.message : "",
+    /repeatedly returned an invalid final finding/
+  );
+});
+
 test(
   "step6 chaos persists one recoverable failure across interruption and resume",
   { timeout: 180_000 },

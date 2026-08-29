@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "vite dev",
     "start": "vite dev",
+    "investigate": "node --experimental-strip-types scripts/run-investigation-scenario.ts",
     "build": "vite build",
     "deploy": "npm run build && wrangler deploy",
     "simulator:validate": "node --experimental-strip-types --test simulator/generator.test.ts",
@@ -24,7 +25,7 @@
     "presentation:validate": "node --experimental-strip-types --test src/investigation/signal-data.test.ts",
     "types": "wrangler types env.d.ts",
     "format": "oxfmt --write .",
-    "lint": "oxlint src/ simulator/",
+    "lint": "oxlint src/ simulator/ scripts/",
     "check:fast": "oxfmt --check . && npm run lint && tsc && npm run simulator:validate && npm run model:validate && npm run presentation:validate",
     "check": "npm run check:fast && npm run telemetry:validate && npm run investigation:validate"
   },
