@@ -74,12 +74,44 @@ test("Anthropic request uses Sonnet 5 without unsupported sampling or thinking f
   assert.match(String(body.system), /bot or other transient traffic/i);
   assert.match(String(body.system), /filters\.traffic_source/i);
   assert.match(String(body.system), /remaining tool calls is 0/i);
+  assert.match(String(body.system), /availableTargets/);
+  assert.match(
+    String(body.system),
+    /senior infrastructure engineer opening the permalink cold/i
+  );
+  assert.match(String(body.system), /experienced incident responder/i);
+  assert.match(String(body.system), /ordinary engineering language/i);
+  assert.match(
+    String(body.system),
+    /impact\.indicators: 1-3 current degraded/i
+  );
+  assert.match(String(body.system), /at most 6 representative values/i);
+  assert.match(String(body.system), /Never write report-like filler/i);
 
   const finalOnlyRequest = buildAnthropicModelRequest({
     ...modelContext(),
     remainingToolCalls: 0
   });
   assert.deepEqual(finalOnlyRequest.tool_choice, { type: "none" });
+
+  const rejectedContext = modelContext();
+  rejectedContext.investigation.events = [
+    {
+      id: "evt-invalid-final",
+      investigationId: "inv-test",
+      sequence: 1,
+      at: "2026-08-26T14:30:00.000Z",
+      type: "model.failed",
+      turn: 7,
+      message: "finding.evidence[0].values must contain at most 6 entries",
+      attempt: 1,
+      retryable: true
+    }
+  ];
+  assert.match(
+    String(buildAnthropicModelRequest(rejectedContext).system),
+    /previous rejected final: finding\.evidence\[0\]\.values/i
+  );
 });
 
 test("Anthropic request binds the platform fetch receiver", async () => {
@@ -270,8 +302,9 @@ function modelContext(
         environment: "production",
         question: "Why did latency and origin errors rise?",
         window
-      }
-    } as InvestigationModelContext["investigation"],
+      },
+      events: []
+    } as unknown as InvestigationModelContext["investigation"],
     history,
     turn: history.length + 1,
     remainingToolCalls: 10 - history.length

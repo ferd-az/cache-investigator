@@ -425,6 +425,20 @@ test("deployment and dependency tools return the correlated change and healthy c
   assert.ok(dependencies.dependencies[0].latencyP99Ms <= 45);
   assert.ok(dependencies.dependencies[1].latencyP99Ms >= 67);
   assert.ok(dependencies.dependencies[1].latencyP99Ms <= 75);
+
+  const emptyDependencies = await checkDependencyHealth(db, {
+    from: "2026-08-26T14:15:00.000Z",
+    to: "2026-08-26T14:45:00.000Z",
+    service: "catalog-edge",
+    dependencies: ["origin"]
+  });
+  assert.deepEqual(emptyDependencies.dependencies, []);
+  assert.deepEqual(emptyDependencies.availableTargets, [
+    {
+      service: "catalog-origin",
+      dependencies: ["catalog-db", "inventory-api"]
+    }
+  ]);
 });
 
 test("all tool limits and time windows are enforced before querying", async () => {

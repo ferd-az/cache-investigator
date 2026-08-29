@@ -19,7 +19,7 @@
     "telemetry:seed:local": "node --experimental-strip-types simulator/seed-d1.ts --local",
     "fixtures:series": "node --experimental-strip-types --disable-warning=ExperimentalWarning simulator/export-fixture-series.ts && oxfmt --write src/fixtures/telemetry-series.ts",
     "telemetry:validate": "node --experimental-strip-types --test src/telemetry/tools.integration.test.ts",
-    "model:validate": "node --experimental-strip-types --test src/investigation/anthropic-model.test.ts",
+    "model:validate": "node --experimental-strip-types --test src/investigation/anthropic-model.test.ts src/investigation/finding-editorial.test.ts",
     "investigation:validate": "node --experimental-strip-types --test src/investigation/runtime.integration.test.ts",
     "presentation:validate": "node --experimental-strip-types --test src/investigation/signal-data.test.ts",
     "types": "wrangler types env.d.ts",

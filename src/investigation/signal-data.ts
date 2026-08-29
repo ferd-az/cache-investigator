@@ -15,6 +15,7 @@ const PLOTTED_METRICS = new Set<MetricName>([
 export type InvestigationSignalData = {
   series: QueryMetricsResult;
   scopeLabel: string;
+  onsetAt?: string;
   markers: Array<{ label: string; at: string }>;
   bands: Array<{ label: string; from: string; to: string }>;
 };
@@ -98,9 +99,28 @@ export function getInvestigationSignalData(
   return {
     series: candidate.series,
     scopeLabel: candidate.route ?? investigation.scope.service,
+    onsetAt: nearestObservedBucketStart(
+      candidate.series,
+      investigation.finding?.impact.startedAt
+    ),
     markers,
     bands: detectRuledOutTrafficBurst(investigation, candidate, markers)
   };
+}
+
+function nearestObservedBucketStart(
+  series: QueryMetricsResult,
+  reportedOnset?: string
+) {
+  if (!reportedOnset || series.points.length === 0) return undefined;
+  const target = Date.parse(reportedOnset);
+  if (!Number.isFinite(target)) return undefined;
+
+  return series.points.reduce((nearest, point) => {
+    const nearestDistance = Math.abs(Date.parse(nearest.bucketStart) - target);
+    const pointDistance = Math.abs(Date.parse(point.bucketStart) - target);
+    return pointDistance <= nearestDistance ? point : nearest;
+  }).bucketStart;
 }
 
 function availableMetrics(series: QueryMetricsResult): MetricName[] {

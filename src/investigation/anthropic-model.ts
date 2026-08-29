@@ -2,6 +2,7 @@ import type {
   InvestigationToolCall,
   InvestigationToolName
 } from "./contracts.ts";
+import { finalFindingEditorialLimits } from "./finding-editorial.ts";
 import {
   InvestigationModelError,
   type InvestigationModel,
@@ -137,7 +138,7 @@ const toolSchemas = [
   {
     name: "check_dependency_health",
     description:
-      "Check bounded dependency latency, error rate, and health for a service.",
+      "Check bounded dependency latency, error rate, and health for the service that owns the downstream dependencies. This may differ from the scoped edge service. An empty result includes availableTargets when dependency telemetry exists elsewhere in the same window; retry once using a returned service and its dependency names.",
     input_schema: {
       type: "object",
       additionalProperties: false,
@@ -480,6 +481,16 @@ function systemPrompt(context: InvestigationModelContext) {
       entry.call.input.filters?.traffic_source === "bot" &&
       entry.result !== undefined
   );
+  const rejectedFinalMessage = [...(context.investigation.events ?? [])]
+    .reverse()
+    .flatMap((event) =>
+      event.type === "model.failed" &&
+      /^(?:finding\.|Finding |Final finding|Alternative hypothesis)/.test(
+        event.message
+      )
+        ? [event.message]
+        : []
+    )[0];
   return `You are a production cache-regression investigator. Work only from the supplied scope and results returned by the four server tools. Never assume a cause, invent telemetry, or request data outside the scope.
 
 Scope:
@@ -492,14 +503,49 @@ Scope:
 - completed evidence tools: ${[...completedTools].join(", ") || "none"}
 - missing required evidence tools: ${missingEvidenceTools.join(", ") || "none"}
 - bot traffic timing check: ${botTrafficChecked ? "complete" : "pending"}
+- previous rejected final: ${rejectedFinalMessage ?? "none"}
 
 Choose at most one tool per turn. Start with aggregate metrics, localize affected routes and request segments, correlate timing with deployments, inspect structured logs, and check dependencies or transient traffic as alternative explanations. Explicitly assess whether bot or other transient traffic overlaps the regression onset, and carry that timing conclusion into alternativesRuledOut. Use no more than one dedicated query_metrics call for that check, with filters.traffic_source set to "bot", and compare its last elevated bucket to the regression onset. If the bot traffic timing check is complete, do not run another bot-filtered query. You must successfully call all four evidence tools before returning a final finding; if the missing required evidence tools list is non-empty, call one of those tools next instead of finalizing. If remaining tool calls is 0, return a final or no_findings response instead of calling another tool. Keep queries narrow enough to remain under server limits. For search_logs, set an explicit limit of 10 or fewer first and paginate only if needed. Omit optional tool fields when unused; do not send null. Encode integer fields such as limit and status as JSON numbers, not strings. Tool errors are evidence about invalid inputs; correct them on a later turn. Historical tool payloads may include a projection marker; omitted rows remain persisted, so narrow or paginate rather than assuming they do not exist.
+
+If check_dependency_health returns no records with availableTargets, retry it once using one returned service and the listed dependency names. Do not repeat the same empty dependency query. Cite the successful dependency result; if no target is available, cite the empty result as an evidence limitation and lower confidence rather than inventing dependency health.
+
+If a previous final was rejected, correct that specific validation error before returning another final. Do not repeat the rejected shape.
+
+${finalFindingEditorialBrief()}
 
 When the evidence is sufficient, return JSON only with this envelope: {"kind":"final","finding":FINAL_FINDING}. Use this exact FINAL_FINDING shape:
 {"headline":"...","status":"confirmed|likely|inconclusive","summary":"...","impact":{"startedAt":"ISO timestamp","summary":"...","affectedRoutes":["..."],"indicators":[{"label":"...","value":0,"unit":"optional"}]},"rootCause":{"summary":"...","change":"...","mechanism":["..."]},"confidence":{"level":"high|medium|low","score":0.0,"rationale":"..."},"recommendation":{"immediate":"...","verify":"...","followUps":["..."]},"evidence":[{"id":"exact evidenceId","kind":"metric|log|deployment|dependency","title":"...","claim":"...","source":{"callId":"exact callId"},"observedAt":"optional ISO timestamp","window":{"from":"ISO timestamp","to":"ISO timestamp"},"values":[{"label":"...","value":0,"unit":"optional"}]}],"alternativesRuledOut":[{"hypothesis":"...","reason":"...","evidenceIds":["exact evidenceId"]}]}.
 Each evidence item must use an exact evidenceId and source.callId from a completed tool result. Cite metric, log, deployment, and dependency evidence. Rule out at least one plausible alternative. Do not copy a tool result wholesale.
 
-If bounded evidence genuinely supports no actionable finding, return {"kind":"no_findings","summary":"..."}.`;
+If bounded evidence genuinely supports no actionable finding, return {"kind":"no_findings","summary":"..."}. Write at most ${finalFindingEditorialLimits.noFindingsSummaryChars} characters across two sentences: what was checked, then what remains unknown or what should be watched.`;
+}
+
+function finalFindingEditorialBrief() {
+  const limits = finalFindingEditorialLimits;
+  return `Final-finding editorial standard:
+Write for a senior infrastructure engineer opening the permalink cold. They understand production terms such as p99, cache hit rate, 429, and rollback, but they do not know this service's internals. They need to decide whether to act, investigate further, or watch recovery. Write like an experienced incident responder handing findings to a peer: direct, calm, specific, and appropriately skeptical.
+
+Use short, natural declarative sentences with concrete subjects and active verbs. Prefer "Cache hits fell to 18%" over "A degradation in cache performance was observed." Never write report-like filler such as "the analysis shows", "based on the available evidence", "it is important to note", "the data suggests that", or "this resulted in a significant degradation". Do not use vague magnitude words such as "almost nothing", "nearly all", or "significant" when measurements are available. Do not narrate tool calls, queries, reasoning steps, or the investigation process.
+
+Keep familiar engineering terms. Explain service-specific behavior in plain language. Preserve identifiers only when they help someone act. Translate configuration jargon into behavior: write "stopped stripping a parameter from cache keys", not "removed a parameter from the normalization exclusion list". Translate machine metric names everywhere: write "cache hit rate", "key cardinality", "origin requests", "origin error rate", and "response p99", never cache_hit_rate, cache_key_cardinality, origin_request_count, origin_error_rate, or response_latency_p99. Use sentence case and avoid noun piles or slash shorthand. Round aggregate values to useful operational precision. Units must be human-readable: %, ms, s, min, req/min, or req/s; never snake_case units.
+
+Every field has one job:
+- headline: one causal conclusion and its operational consequence; at most ${limits.headlineChars} characters. Keep implementation identifiers, routes, versions, metrics, timestamps, and commits out of the headline; put them in the fields below. Do not include the entire argument.
+- summary: a standalone one-sentence synopsis for completion events and compressed surfaces; at most ${limits.summaryChars} characters.
+- rootCause.change: changed behavior only, in one sentence; at most ${limits.rootCauseChangeChars} characters. Name the version or commit only when it helps someone act. Do not describe impact.
+- rootCause.summary: the causal bridge from the change to the failure, in one sentence; at most ${limits.rootCauseSummaryChars} characters. Do not repeat the deployment or impact values.
+- rootCause.mechanism: ${limits.mechanism.min}-${limits.mechanism.max} distinct causal steps, each adding new information.
+- impact.summary: affected scope and onset only; at most ${limits.impactSummaryChars} characters.
+- impact.indicators: ${limits.impactIndicators.min}-${limits.impactIndicators.max} current degraded values that best express harm. Never emit separate before/after indicators; comparisons belong in evidence and charts.
+- recommendation.immediate: one concrete action beginning with an imperative verb. Do not restate the diagnosis.
+- recommendation.verify: measurable recovery thresholds and a sustained observation window.
+- confidence.rationale: why the causal claim deserves its confidence, using the strongest timing, mechanism, and alternative evidence. Do not summarize the incident again.
+- evidence: titles state claims rather than data-source names; each claim contains one distinct piece of proof. Include at most ${limits.evidence.valuesPerItem} representative values per evidence item. Never serialize a time series or copy a tool result into values; the complete receipt is already persisted. Preserve technical depth through the claim and source reference.
+- alternativesRuledOut: explain why each plausible alternative conflicts with the observed timing or telemetry.
+
+Match causal language to status. For confirmed, use direct language such as "caused" or "broke". For likely, use "likely caused" or "points to". For inconclusive, state the correlation and the missing evidence. Never overstate confidence.
+
+Before returning the JSON, silently edit it once: remove repeated facts, replace machine-generated phrasing with ordinary engineering language, remove details that do not affect diagnosis, confidence, or action, and verify that the overview can be understood in ten seconds while the evidence supports deeper inspection.`;
 }
 
 function parseArguments(value: unknown): InvestigationToolCall["input"] {

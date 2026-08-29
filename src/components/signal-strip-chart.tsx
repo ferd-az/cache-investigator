@@ -505,7 +505,7 @@ function SignalChartRow({
             strokeLinecap="round"
             strokeLinejoin="round"
             strokeWidth={1.8}
-            type="linear"
+            type="stepAfter"
           />
           <Line
             activeDot={false}
@@ -517,7 +517,7 @@ function SignalChartRow({
             strokeLinecap="round"
             strokeLinejoin="round"
             strokeWidth={1.8}
-            type="linear"
+            type="stepAfter"
           />
           {lastDatum ? (
             <ReferenceDot
@@ -591,33 +591,55 @@ function buildChartModel(
     parsedOnsetAt < toMs
       ? parsedOnsetAt
       : undefined;
-  const splitAt =
-    visibleOnsetAt ??
-    (visibleMarkers.length
-      ? Math.min(...visibleMarkers.map((marker) => marker.at))
-      : undefined);
-  const afterAt = visibleOnsetAt ?? splitAt;
   const points = series.points
     .map((point) => ({
       timestamp: Date.parse(point.bucketStart),
+      bucketEnd: Date.parse(point.bucketEnd),
       values: point.values
     }))
     .filter((point) => point.timestamp >= fromMs && point.timestamp < toMs)
     .sort((left, right) => left.timestamp - right.timestamp);
+  const timestamps = points.map((point) => point.timestamp);
+  const alignedOnsetAt =
+    visibleOnsetAt === undefined
+      ? undefined
+      : (nearestValue(timestamps, visibleOnsetAt) ?? undefined);
+  const firstMarkerAt = visibleMarkers.length
+    ? Math.min(...visibleMarkers.map((marker) => marker.at))
+    : undefined;
+  const alignedMarkerSplit =
+    firstMarkerAt === undefined
+      ? undefined
+      : (nearestValue(timestamps, firstMarkerAt) ?? firstMarkerAt);
+  const splitAt = alignedOnsetAt ?? alignedMarkerSplit;
+  const afterAt = alignedOnsetAt ?? splitAt;
 
   const rows = SIGNAL_ROWS.flatMap((row) => {
     const readings = points.flatMap((point) => {
       const value = point.values[row.metric];
       return typeof value === "number"
-        ? [{ timestamp: point.timestamp, value }]
+        ? [{ timestamp: point.timestamp, bucketEnd: point.bucketEnd, value }]
         : [];
     });
     if (readings.length < 2) return [];
+    const lastReading = readings.at(-1)!;
+    const terminalTimestamp = Math.min(lastReading.bucketEnd, toMs);
+    const displayReadings =
+      terminalTimestamp > lastReading.timestamp
+        ? [
+            ...readings,
+            {
+              ...lastReading,
+              timestamp: terminalTimestamp,
+              bucketEnd: terminalTimestamp
+            }
+          ]
+        : readings;
 
     return [
       {
         ...row,
-        data: readings.map((reading) => ({
+        data: displayReadings.map((reading) => ({
           timestamp: reading.timestamp,
           value: reading.value,
           ...(splitAt === undefined || reading.timestamp <= splitAt
@@ -650,8 +672,8 @@ function buildChartModel(
     toMs,
     markers: visibleMarkers,
     bands: visibleBands,
-    onsetAt: visibleOnsetAt,
-    timestamps: points.map((point) => point.timestamp),
+    onsetAt: alignedOnsetAt,
+    timestamps,
     rows
   };
 }

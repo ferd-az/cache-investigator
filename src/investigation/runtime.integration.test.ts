@@ -130,6 +130,7 @@ test("persisted runs can be listed as lightweight summaries", async () => {
   const summary = summaries.find(
     (candidate) => candidate.id === prepared.investigation.id
   );
+
   assert.ok(summary);
   assert.equal(summary.status, "queued");
   assert.equal(summary.scope.service, scope.service);
@@ -198,7 +199,7 @@ test(
 
     assert.equal(completed.status, "completed");
     assert.ok(completed.finding);
-    assert.match(completed.finding.headline, /cache key fragmentation/i);
+    assert.match(completed.finding.headline, /cache-key change/i);
     assert.match(completed.finding.rootCause.change, /session_id/i);
     assert.ok(
       completed.finding.rootCause.mechanism.some((step) =>
@@ -207,6 +208,11 @@ test(
     );
     assert.match(completed.finding.summary, /origin/i);
     assert.match(completed.finding.summary, /latency/i);
+    assert.equal(completed.finding.impact.indicators.length, 3);
+    assert.deepEqual(
+      completed.finding.impact.indicators.map((indicator) => indicator.unit),
+      ["%", "%", "ms"]
+    );
     assert.ok(
       completed.finding.alternativesRuledOut.some((alternative) =>
         /bot burst/i.test(alternative.hypothesis)
@@ -266,6 +272,56 @@ test(
         )
       );
     }
+  }
+);
+
+test(
+  "overlong or repeated final copy is rejected before a concise finding completes",
+  { timeout: 180_000 },
+  async () => {
+    const prepared = await prepareInvestigation(repository, {
+      idempotencyKey: "editorial-final-retries",
+      scope
+    });
+    const model = new EvidenceDrivenFakeModel((finding, attempt) => {
+      if (attempt === 1) {
+        return {
+          ...finding,
+          impact: {
+            ...finding.impact,
+            indicators: [
+              ...finding.impact.indicators,
+              value("origin requests", 908, "requests_per_minute")
+            ]
+          }
+        };
+      }
+      if (attempt === 2) {
+        return {
+          ...finding,
+          rootCause: {
+            ...finding.rootCause,
+            summary: finding.rootCause.change
+          }
+        };
+      }
+      return finding;
+    });
+
+    const completed = await runInvestigation(prepared.investigation.id, {
+      repository,
+      model,
+      executeTool: (call) => executeInvestigationTool(db, call)
+    });
+
+    assert.equal(completed.status, "completed");
+    assert.equal(model.finalFindingAttempts, 3);
+    const editorialFailures = completed.events.filter(
+      (event) => event.type === "model.failed"
+    );
+    assert.equal(editorialFailures.length, 2);
+    assert.match(editorialFailures[0].message, /between 1 and 3 entries/);
+    assert.match(editorialFailures[1].message, /repeat the same copy/);
   }
 );
 
@@ -678,6 +734,20 @@ class MaxLogsProjectionModel implements InvestigationModel {
 }
 
 class EvidenceDrivenFakeModel implements InvestigationModel {
+  finalFindingAttempts = 0;
+  private readonly transformFinding: (
+    finding: FinalFinding,
+    attempt: number
+  ) => unknown;
+
+  constructor(
+    transformFinding: (finding: FinalFinding, attempt: number) => unknown = (
+      finding
+    ) => finding
+  ) {
+    this.transformFinding = transformFinding;
+  }
+
   async next(
     context: InvestigationModelContext
   ): Promise<InvestigationModelDecision> {
@@ -765,7 +835,14 @@ class EvidenceDrivenFakeModel implements InvestigationModel {
           }
         });
       default:
-        return { type: "final", finding: buildFinding(completed) };
+        this.finalFindingAttempts += 1;
+        return {
+          type: "final",
+          finding: this.transformFinding(
+            buildFinding(completed),
+            this.finalFindingAttempts
+          )
+        };
     }
   }
 }
@@ -833,10 +910,10 @@ function buildFinding(history: InvestigationHistoryEntry[]): FinalFinding {
 
   return {
     id: "model-proposed-id",
-    headline: "Session-bearing cache key fragmentation overloaded origin",
+    headline: "A cache-key change is overloading the catalog origin",
     status: "confirmed",
     summary:
-      "A deployment fragmented /products cache keys by session_id, collapsing hit rate and increasing origin errors and response latency.",
+      "A cache-key change fragmented /products responses by session_id, overloading the origin and increasing errors and latency.",
     impact: {
       startedAt: "2026-08-26T14:20:00.000Z",
       summary:
@@ -844,11 +921,6 @@ function buildFinding(history: InvestigationHistoryEntry[]): FinalFinding {
       affectedRoutes: ["/products"],
       indicators: [
         value("cache hit rate", regressed.values.cache_hit_rate, "percent"),
-        value(
-          "origin requests",
-          regressed.values.origin_request_count,
-          "requests_per_minute"
-        ),
         value(
           "origin error rate",
           regressed.values.origin_error_rate,
@@ -863,8 +935,8 @@ function buildFinding(history: InvestigationHistoryEntry[]): FinalFinding {
     },
     rootCause: {
       summary:
-        "The /products cache key retained a high-cardinality session identifier.",
-      change: deployment.changes.join(" "),
+        "Each session produced a separate cache entry, driving misses to the origin.",
+      change: `${deployment.version} stopped stripping session_id from /products cache keys.`,
       mechanism: [
         `Session-bearing requests produced ${session.values.cache_key_cardinality} keys per five-minute bucket.`,
         `A sampled miss included session_id=${sample.sessionId} in ${sample.cacheKey}.`,

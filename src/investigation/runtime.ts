@@ -10,6 +10,12 @@ import type {
   InvestigationToolName,
   InvestigationTrigger
 } from "./contracts.ts";
+import {
+  canonicalizeFindingUnit,
+  finalFindingEditorialLimits,
+  machineMetricInEditorialField,
+  repeatedEditorialFieldPair
+} from "./finding-editorial.ts";
 import type {
   InvestigationEventBody,
   InvestigationRepository
@@ -733,7 +739,11 @@ async function completeNoFindings(
   options: InvestigationRunnerOptions,
   now: () => Date
 ): Promise<Investigation> {
-  const bounded = requiredString(summary, "no-findings summary", 2_000);
+  const bounded = requiredString(
+    summary,
+    "no-findings summary",
+    finalFindingEditorialLimits.noFindingsSummaryChars
+  );
   await emit(options, investigation.id, "investigation.no_findings", now(), {
     type: "investigation.no_findings",
     summary: bounded
@@ -944,7 +954,11 @@ function normalizeFinalFinding(
       .filter((entry) => entry.result !== undefined)
       .map((entry) => [entry.callId, entry])
   );
-  const evidenceInput = array(input.evidence, "finding.evidence", 12);
+  const evidenceInput = array(
+    input.evidence,
+    "finding.evidence",
+    finalFindingEditorialLimits.evidence.max
+  );
   const evidenceIdMap = new Map<string, string>();
   const evidence = evidenceInput.map((item, index) => {
     const raw = object(item, `finding.evidence[${index}]`);
@@ -968,11 +982,15 @@ function normalizeFinalFinding(
     return {
       id,
       kind: evidenceKind(executed.call.tool),
-      title: requiredString(raw.title, `finding.evidence[${index}].title`, 300),
+      title: requiredString(
+        raw.title,
+        `finding.evidence[${index}].title`,
+        finalFindingEditorialLimits.evidence.titleChars
+      ),
       claim: requiredString(
         raw.claim,
         `finding.evidence[${index}].claim`,
-        1_000
+        finalFindingEditorialLimits.evidence.claimChars
       ),
       source: { ...executed.call, callId },
       ...optionalTimestamp(
@@ -983,7 +1001,10 @@ function normalizeFinalFinding(
         raw.window,
         `finding.evidence[${index}].window`
       ),
-      values: parseValues(raw.values, `finding.evidence[${index}].values`)
+      values: parseValues(raw.values, `finding.evidence[${index}].values`, {
+        min: 0,
+        max: finalFindingEditorialLimits.evidence.valuesPerItem
+      })
     } satisfies FindingEvidence;
   });
   const kinds = new Set(evidence.map((item) => item.kind));
@@ -1031,7 +1052,7 @@ function normalizeFinalFinding(
   const alternatives = array(
     input.alternativesRuledOut,
     "finding.alternativesRuledOut",
-    8
+    finalFindingEditorialLimits.alternatives.max
   ).map((item, index) => {
     const alternative = object(item, `finding.alternativesRuledOut[${index}]`);
     const rawIds = stringArray(
@@ -1050,12 +1071,12 @@ function normalizeFinalFinding(
       hypothesis: requiredString(
         alternative.hypothesis,
         `finding.alternativesRuledOut[${index}].hypothesis`,
-        500
+        finalFindingEditorialLimits.alternatives.hypothesisChars
       ),
       reason: requiredString(
         alternative.reason,
         `finding.alternativesRuledOut[${index}].reason`,
-        1_000
+        finalFindingEditorialLimits.alternatives.reasonChars
       ),
       evidenceIds
     };
@@ -1067,74 +1088,163 @@ function normalizeFinalFinding(
     );
   }
 
+  const headline = requiredString(
+    input.headline,
+    "finding.headline",
+    finalFindingEditorialLimits.headlineChars
+  );
+  const summary = requiredString(
+    input.summary,
+    "finding.summary",
+    finalFindingEditorialLimits.summaryChars
+  );
+  const impactSummary = requiredString(
+    impact.summary,
+    "finding.impact.summary",
+    finalFindingEditorialLimits.impactSummaryChars
+  );
+  const rootCauseSummary = requiredString(
+    rootCause.summary,
+    "finding.rootCause.summary",
+    finalFindingEditorialLimits.rootCauseSummaryChars
+  );
+  const rootCauseChange = requiredString(
+    rootCause.change,
+    "finding.rootCause.change",
+    finalFindingEditorialLimits.rootCauseChangeChars
+  );
+  const confidenceRationale = requiredString(
+    confidence.rationale,
+    "finding.confidence.rationale",
+    finalFindingEditorialLimits.confidenceRationaleChars
+  );
+  const recommendationImmediate = requiredString(
+    recommendation.immediate,
+    "finding.recommendation.immediate",
+    finalFindingEditorialLimits.recommendationImmediateChars
+  );
+  const recommendationVerify = requiredString(
+    recommendation.verify,
+    "finding.recommendation.verify",
+    finalFindingEditorialLimits.recommendationVerifyChars
+  );
+  const affectedRoutes = stringArray(
+    impact.affectedRoutes,
+    "finding.impact.affectedRoutes",
+    finalFindingEditorialLimits.affectedRoutes,
+    { itemMax: finalFindingEditorialLimits.affectedRouteChars }
+  );
+  const impactIndicators = parseValues(
+    impact.indicators,
+    "finding.impact.indicators",
+    finalFindingEditorialLimits.impactIndicators
+  );
+  const mechanism = stringArray(
+    rootCause.mechanism,
+    "finding.rootCause.mechanism",
+    finalFindingEditorialLimits.mechanism.max,
+    {
+      itemMax: finalFindingEditorialLimits.mechanism.itemChars,
+      min: finalFindingEditorialLimits.mechanism.min
+    }
+  );
+  const followUps = stringArray(
+    recommendation.followUps,
+    "finding.recommendation.followUps",
+    finalFindingEditorialLimits.followUps.max,
+    { itemMax: finalFindingEditorialLimits.followUps.itemChars }
+  );
+  const overviewFields = [
+    ["headline", headline],
+    ["impact.summary", impactSummary],
+    ["rootCause.change", rootCauseChange],
+    ["rootCause.summary", rootCauseSummary],
+    ["confidence.rationale", confidenceRationale],
+    ["recommendation.immediate", recommendationImmediate],
+    ["recommendation.verify", recommendationVerify]
+  ] as const;
+  const repeatedFields = repeatedEditorialFieldPair(overviewFields);
+  if (repeatedFields) {
+    throw new InvestigationModelError(
+      `Finding editorial fields ${repeatedFields[0]} and ${repeatedFields[1]} repeat the same copy`,
+      false
+    );
+  }
+  const editorialFields: Array<readonly [string, string]> = [
+    ...overviewFields,
+    ["summary", summary]
+  ];
+  mechanism.forEach((step, index) =>
+    editorialFields.push([`rootCause.mechanism[${index}]`, step])
+  );
+  followUps.forEach((followUp, index) =>
+    editorialFields.push([`recommendation.followUps[${index}]`, followUp])
+  );
+  impactIndicators.forEach((indicator, index) =>
+    editorialFields.push([`impact.indicators[${index}].label`, indicator.label])
+  );
+  evidence.forEach((item, index) => {
+    editorialFields.push([`evidence[${index}].title`, item.title]);
+    editorialFields.push([`evidence[${index}].claim`, item.claim]);
+  });
+  alternatives.forEach((alternative, index) => {
+    editorialFields.push([
+      `alternativesRuledOut[${index}].hypothesis`,
+      alternative.hypothesis
+    ]);
+    editorialFields.push([
+      `alternativesRuledOut[${index}].reason`,
+      alternative.reason
+    ]);
+  });
+  const machineMetric = machineMetricInEditorialField(editorialFields);
+  if (machineMetric) {
+    throw new InvestigationModelError(
+      `Finding editorial field ${machineMetric[0]} uses machine metric name ${machineMetric[1]}; use natural engineering language`,
+      false
+    );
+  }
+
   return {
     id: `finding:${investigation.id}`,
-    headline: requiredString(input.headline, "finding.headline", 300),
+    headline,
     status,
-    summary: requiredString(input.summary, "finding.summary", 2_000),
+    summary,
     impact: {
       startedAt: explicitTimestamp(
         impact.startedAt,
         "finding.impact.startedAt"
       ),
-      summary: requiredString(impact.summary, "finding.impact.summary", 1_000),
-      affectedRoutes: stringArray(
-        impact.affectedRoutes,
-        "finding.impact.affectedRoutes",
-        20
-      ),
-      indicators: parseValues(impact.indicators, "finding.impact.indicators")
+      summary: impactSummary,
+      affectedRoutes,
+      indicators: impactIndicators
     },
     rootCause: {
-      summary: requiredString(
-        rootCause.summary,
-        "finding.rootCause.summary",
-        1_000
-      ),
-      change: requiredString(
-        rootCause.change,
-        "finding.rootCause.change",
-        1_000
-      ),
-      mechanism: stringArray(
-        rootCause.mechanism,
-        "finding.rootCause.mechanism",
-        12
-      )
+      summary: rootCauseSummary,
+      change: rootCauseChange,
+      mechanism
     },
     confidence: {
       level,
       score,
-      rationale: requiredString(
-        confidence.rationale,
-        "finding.confidence.rationale",
-        1_000
-      )
+      rationale: confidenceRationale
     },
     recommendation: {
-      immediate: requiredString(
-        recommendation.immediate,
-        "finding.recommendation.immediate",
-        1_000
-      ),
-      verify: requiredString(
-        recommendation.verify,
-        "finding.recommendation.verify",
-        1_000
-      ),
-      followUps: stringArray(
-        recommendation.followUps,
-        "finding.recommendation.followUps",
-        12
-      )
+      immediate: recommendationImmediate,
+      verify: recommendationVerify,
+      followUps
     },
     evidence,
     alternativesRuledOut: alternatives
   };
 }
 
-function parseValues(value: unknown, label: string): EvidenceValue[] {
-  return array(value, label, 20).map((item, index) => {
+function parseValues(
+  value: unknown,
+  label: string,
+  bounds: Readonly<{ min: number; max: number }> = { min: 0, max: 20 }
+): EvidenceValue[] {
+  return array(value, label, bounds.max, bounds.min).map((item, index) => {
     const entry = object(item, `${label}[${index}]`);
     if (
       typeof entry.value !== "string" &&
@@ -1145,12 +1255,24 @@ function parseValues(value: unknown, label: string): EvidenceValue[] {
         false
       );
     }
+    const unit =
+      entry.unit === undefined
+        ? undefined
+        : requiredString(
+            canonicalizeFindingUnit(
+              requiredString(entry.unit, `${label}[${index}].unit`, 100)
+            ),
+            `${label}[${index}].unit`,
+            finalFindingEditorialLimits.valueUnitChars
+          );
     return {
-      label: requiredString(entry.label, `${label}[${index}].label`, 200),
+      label: requiredString(
+        entry.label,
+        `${label}[${index}].label`,
+        finalFindingEditorialLimits.valueLabelChars
+      ),
       value: entry.value,
-      ...(entry.unit === undefined
-        ? {}
-        : { unit: requiredString(entry.unit, `${label}[${index}].unit`, 100) })
+      ...(unit ? { unit } : {})
     };
   });
 }
@@ -1194,8 +1316,14 @@ function summarizeToolResult(tool: InvestigationToolName, result: unknown) {
       return `${array(value.rows, "log rows", 100).length} log rows returned${value.nextCursor ? " with another page available" : ""}`;
     case "list_deployments":
       return `${array(value.deployments, "deployments", 20).length} deployments returned`;
-    case "check_dependency_health":
-      return `${array(value.dependencies, "dependencies", 10).length} dependency health records returned`;
+    case "check_dependency_health": {
+      const dependencies = array(value.dependencies, "dependencies", 10);
+      const hasAvailableTargets =
+        dependencies.length === 0 &&
+        Array.isArray(value.availableTargets) &&
+        value.availableTargets.length > 0;
+      return `${dependencies.length} dependency health records returned${hasAvailableTargets ? "; available targets supplied for a corrected query" : ""}`;
+    }
   }
 }
 
@@ -1247,30 +1375,42 @@ function object(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function array(value: unknown, label: string, max: number): unknown[] {
-  if (!Array.isArray(value) || value.length > max) {
+function array(value: unknown, label: string, max: number, min = 0): unknown[] {
+  if (!Array.isArray(value) || value.length < min || value.length > max) {
+    const range =
+      min === 0
+        ? `at most ${max}`
+        : min === max
+          ? `exactly ${max}`
+          : `between ${min} and ${max}`;
     throw new InvestigationModelError(
-      `${label} must be an array with at most ${max} entries`,
+      `${label} must be an array with ${range} entries`,
       false
     );
   }
   return value;
 }
 
-function stringArray(value: unknown, label: string, max: number): string[] {
-  return array(value, label, max).map((item, index) =>
-    requiredString(item, `${label}[${index}]`, 1_000)
+function stringArray(
+  value: unknown,
+  label: string,
+  max: number,
+  options: Readonly<{ itemMax?: number; min?: number }> = {}
+): string[] {
+  return array(value, label, max, options.min).map((item, index) =>
+    requiredString(item, `${label}[${index}]`, options.itemMax ?? 1_000)
   );
 }
 
 function requiredString(value: unknown, label: string, max = 200): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > max) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  if (trimmed.length === 0 || trimmed.length > max) {
     throw new InvestigationModelError(
       `${label} must be a non-empty string no longer than ${max} characters`,
       false
     );
   }
-  return value;
+  return trimmed;
 }
 
 function explicitTimestamp(value: unknown, label: string) {

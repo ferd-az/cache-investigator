@@ -121,6 +121,10 @@ export type DependencyHealthRecord = {
 
 export type CheckDependencyHealthResult = {
   dependencies: DependencyHealthRecord[];
+  availableTargets?: Array<{
+    service: string;
+    dependencies: string[];
+  }>;
 };
 
 export type InvestigationToolResult = {
@@ -486,6 +490,10 @@ export async function checkDependencyHealth(
       healthy: number;
     }>();
 
+  const availableTargets =
+    result.results.length === 0
+      ? await listAvailableDependencyTargets(db, window)
+      : [];
   return {
     dependencies: result.results.map((row) => ({
       dependency: row.dependency,
@@ -493,8 +501,42 @@ export async function checkDependencyHealth(
       latencyP99Ms: row.latency_p99_ms,
       errorRatePercent: row.error_rate_percent,
       healthy: Boolean(row.healthy)
-    }))
+    })),
+    ...(availableTargets.length > 0 ? { availableTargets } : {})
   };
+}
+
+async function listAvailableDependencyTargets(
+  db: D1Database,
+  window: Window
+): Promise<NonNullable<CheckDependencyHealthResult["availableTargets"]>> {
+  const result = await db
+    .prepare(
+      `SELECT DISTINCT d.service, d.dependency
+      FROM dependency_telemetry d
+      JOIN telemetry_corpora c ON c.id = d.corpus_id
+      WHERE c.active = 1 AND c.status = 'ready'
+        AND d.timestamp_ms >= ? AND d.timestamp_ms < ?
+      ORDER BY d.service ASC, d.dependency ASC
+      LIMIT ?`
+    )
+    .bind(
+      window.fromMs,
+      window.toMs,
+      investigationToolLimits.check_dependency_health.maxDependencies
+    )
+    .all<{ service: string; dependency: string }>();
+
+  const dependenciesByService = new Map<string, string[]>();
+  for (const row of result.results) {
+    const dependencies = dependenciesByService.get(row.service) ?? [];
+    dependencies.push(row.dependency);
+    dependenciesByService.set(row.service, dependencies);
+  }
+  return [...dependenciesByService].map(([service, dependencies]) => ({
+    service,
+    dependencies
+  }));
 }
 
 export async function executeInvestigationTool<

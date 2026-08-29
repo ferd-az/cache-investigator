@@ -28,6 +28,10 @@ import type {
   InvestigationAgentState,
   InvestigationEvent
 } from "../investigation/contracts";
+import {
+  canonicalizeFindingUnit,
+  formatFindingValue
+} from "../investigation/finding-editorial";
 import { getInvestigationSignalData } from "../investigation/signal-data";
 import { cn } from "../lib/utils";
 import { unresolvedInvestigation } from "./investigations-page";
@@ -253,6 +257,7 @@ function CompletedDetail({ investigation }: { investigation: Investigation }) {
   const finding = investigation.finding!;
   const recommendationTitle = "Restore cache-key normalization";
   const signalData = getInvestigationSignalData(investigation);
+  const impactStartedAt = signalData?.onsetAt ?? finding.impact.startedAt;
   const primaryEvidence = finding.evidence.slice(0, 5);
   const supportingEvidence = finding.evidence.slice(primaryEvidence.length);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState(
@@ -481,7 +486,7 @@ function CompletedDetail({ investigation }: { investigation: Investigation }) {
                     ) : null}
                     <span className="inline-flex items-center gap-2">
                       <MetadataSeparator />
-                      <span>since {formatTime(finding.impact.startedAt)}</span>
+                      <span>since {formatTime(impactStartedAt)}</span>
                     </span>
                   </div>
 
@@ -495,10 +500,10 @@ function CompletedDetail({ investigation }: { investigation: Investigation }) {
                           {scopedMetricLabel(indicator.label, impactScope)}
                         </dt>
                         <dd className="order-1 flex items-baseline gap-[3px] text-2xl leading-[1.15] font-semibold tracking-[-0.03em] text-[#2d2d33]">
-                          {indicator.value}
+                          {formatFindingValue(indicator.value, indicator.unit)}
                           {indicator.unit ? (
                             <small className="text-xs font-medium tracking-normal text-[#74747c]">
-                              {indicator.unit}
+                              {canonicalizeFindingUnit(indicator.unit)}
                             </small>
                           ) : null}
                         </dd>
@@ -593,7 +598,7 @@ function CompletedDetail({ investigation }: { investigation: Investigation }) {
                 from={investigation.scope.window.from}
                 to={investigation.scope.window.to}
                 scopeLabel={signalData.scopeLabel}
-                onsetAt={finding.impact.startedAt}
+                onsetAt={impactStartedAt}
                 markers={signalData.markers}
                 bands={signalData.bands}
               />
@@ -1050,7 +1055,8 @@ function findToolCompletion(events: InvestigationEvent[], callId: string) {
 }
 
 function formatEvidenceValue(value: FindingEvidence["values"][number]) {
-  return `${value.value}${value.unit ? ` ${value.unit}` : ""}`;
+  const unit = value.unit ? canonicalizeFindingUnit(value.unit) : undefined;
+  return `${formatFindingValue(value.value, unit)}${unit ? ` ${unit}` : ""}`;
 }
 
 function formatMilliseconds(milliseconds: number) {
