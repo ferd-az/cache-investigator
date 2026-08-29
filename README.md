@@ -4,6 +4,13 @@ Cache Investigator is an agent that investigates generated telemetry from a cata
 
 I initially considered investigating a queue failure in a media-processing service. But the cause could be exposed by a single configuration change, making the investigation too straightforward. A cache regression offered a richer problem: several signals change together, and the agent has to connect them before it can explain what happened.
 
+## Try the live investigation
+
+Open [Watchtower](https://cache-investigator.ferd1az.workers.dev), then click
+the **Needs attention** row. This starts a real investigation and opens its
+permanent URL. The page shows the agent's work live, then becomes the completed
+investigation at the same URL.
+
 ## Run locally
 
 Use Node.js 22, then:
