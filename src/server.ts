@@ -18,6 +18,10 @@ import {
   executeInvestigationTool,
   InvestigationToolInputError
 } from "./telemetry/tools.ts";
+import {
+  deliverSlackInterrupt,
+  D1SlackInterruptDeliveryStore
+} from "./investigation/slack-interrupt.ts";
 
 export type InvestigationState = InvestigationAgentState;
 
@@ -26,7 +30,7 @@ export class InvestigationAgent extends Agent<Env, InvestigationState> {
     investigation: null
   };
 
-  async startInvestigation(value: unknown) {
+  async startInvestigation(value: unknown, appOrigin: string) {
     const repository = new D1InvestigationRepository(this.env.TELEMETRY_DB);
     const prepared = await prepareInvestigation(repository, value, new Date(), {
       allowChaos: chaosAllowed(this.env)
@@ -43,6 +47,7 @@ export class InvestigationAgent extends Agent<Env, InvestigationState> {
       prepared.investigation.status === "no_findings" ||
       prepared.investigation.status === "failed"
     ) {
+      await this.deliverSlackInterrupt(prepared.investigation, appOrigin);
       return {
         investigation: prepared.investigation,
         accepted: false,
@@ -54,12 +59,12 @@ export class InvestigationAgent extends Agent<Env, InvestigationState> {
     const receipt = await this.startFiber(
       "cache-investigation",
       async (context) => {
-        context.stash({ investigationId });
-        await this.runDurableInvestigation(investigationId, context);
+        context.stash({ investigationId, appOrigin });
+        await this.runDurableInvestigation(investigationId, appOrigin, context);
       },
       {
         idempotencyKey: `investigation:${investigationId}`,
-        metadata: { investigationId }
+        metadata: { investigationId, appOrigin }
       }
     );
 
@@ -78,7 +83,8 @@ export class InvestigationAgent extends Agent<Env, InvestigationState> {
 
   async onFiberRecovered(context: FiberRecoveryContext) {
     if (context.name !== "cache-investigation") return;
-    const investigationId = recoveryInvestigationId(context);
+    const { investigationId, appOrigin } =
+      recoveryInvestigationContext(context);
     if (!investigationId) {
       return {
         status: "error" as const,
@@ -86,7 +92,10 @@ export class InvestigationAgent extends Agent<Env, InvestigationState> {
       };
     }
 
-    const investigation = await this.runDurableInvestigation(investigationId);
+    const investigation = await this.runDurableInvestigation(
+      investigationId,
+      appOrigin
+    );
     return {
       status: "completed" as const,
       snapshot: { investigationId, status: investigation.status }
@@ -95,10 +104,11 @@ export class InvestigationAgent extends Agent<Env, InvestigationState> {
 
   private async runDurableInvestigation(
     investigationId: string,
+    appOrigin?: string,
     fiber?: FiberContext
   ) {
     const repository = new D1InvestigationRepository(this.env.TELEMETRY_DB);
-    return runInvestigation(investigationId, {
+    const investigation = await runInvestigation(investigationId, {
       repository,
       model: new AnthropicInvestigationModel(this.env.ANTHROPIC_API_KEY),
       executeTool: (call) =>
@@ -107,9 +117,33 @@ export class InvestigationAgent extends Agent<Env, InvestigationState> {
         this.setState({ investigation });
       },
       onCheckpoint: (checkpoint) => {
-        fiber?.stash({ investigationId, checkpoint });
+        fiber?.stash({ investigationId, appOrigin, checkpoint });
       }
     });
+    await this.deliverSlackInterrupt(investigation, appOrigin);
+    return investigation;
+  }
+
+  private async deliverSlackInterrupt(
+    investigation: Investigation,
+    appOrigin?: string
+  ) {
+    if (!appOrigin) return;
+    const result = await deliverSlackInterrupt({
+      investigation,
+      appOrigin,
+      webhookUrl: this.env.SLACK_WEBHOOK_URL,
+      store: new D1SlackInterruptDeliveryStore(this.env.TELEMETRY_DB)
+    });
+    if (
+      result.status === "failed" ||
+      result.status === "invalid_configuration"
+    ) {
+      console.error("Slack interrupt delivery failed", {
+        investigationId: investigation.id,
+        reason: result.error
+      });
+    }
   }
 }
 
@@ -132,9 +166,12 @@ export default {
           allowChaos: chaosAllowed(env)
         });
         const agent = await getAgentByName(env.InvestigationAgent, resolved.id);
-        return Response.json(await agent.startInvestigation(resolved.input), {
-          status: 202
-        });
+        return Response.json(
+          await agent.startInvestigation(resolved.input, url.origin),
+          {
+            status: 202
+          }
+        );
       }
 
       const match = /^\/api\/investigations\/([^/]+)$/.exec(url.pathname);
@@ -178,20 +215,32 @@ export default {
   }
 } satisfies ExportedHandler<Env>;
 
-function recoveryInvestigationId(context: FiberRecoveryContext) {
+function recoveryInvestigationContext(context: FiberRecoveryContext) {
   const snapshot = context.snapshot;
+  const metadata = context.metadata;
+  let investigationId: string | null = null;
+  let appOrigin: string | undefined;
   if (
     typeof snapshot === "object" &&
     snapshot !== null &&
     "investigationId" in snapshot &&
     typeof snapshot.investigationId === "string"
   ) {
-    return snapshot.investigationId;
+    investigationId = snapshot.investigationId;
+  } else if (metadata && typeof metadata.investigationId === "string") {
+    investigationId = metadata.investigationId;
   }
-  const metadata = context.metadata;
-  return metadata && typeof metadata.investigationId === "string"
-    ? metadata.investigationId
-    : null;
+  if (
+    typeof snapshot === "object" &&
+    snapshot !== null &&
+    "appOrigin" in snapshot &&
+    typeof snapshot.appOrigin === "string"
+  ) {
+    appOrigin = snapshot.appOrigin;
+  } else if (metadata && typeof metadata.appOrigin === "string") {
+    appOrigin = metadata.appOrigin;
+  }
+  return { investigationId, appOrigin };
 }
 
 function withChaos(value: unknown, requestedChaos: string | null) {

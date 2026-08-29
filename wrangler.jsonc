@@ -10,7 +10,7 @@
     "run_worker_first": ["/agents/*", "/api/*"]
   },
   "secrets": {
-    "required": ["ANTHROPIC_API_KEY"]
+    "required": ["ANTHROPIC_API_KEY", "SLACK_WEBHOOK_URL"]
   },
   "vars": {
     // Override explicitly in a local/demo invocation to exercise persisted

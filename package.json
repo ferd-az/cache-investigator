@@ -23,10 +23,11 @@
     "model:validate": "node --experimental-strip-types --test src/investigation/anthropic-model.test.ts src/investigation/finding-editorial.test.ts",
     "investigation:validate": "node --experimental-strip-types --test src/investigation/runtime.integration.test.ts",
     "presentation:validate": "node --experimental-strip-types --test src/investigation/signal-data.test.ts",
+    "interrupt:validate": "node --experimental-strip-types --test src/investigation/slack-interrupt.test.ts",
     "types": "wrangler types env.d.ts",
     "format": "oxfmt --write .",
     "lint": "oxlint src/ simulator/ scripts/",
-    "check:fast": "oxfmt --check . && npm run lint && tsc && npm run simulator:validate && npm run model:validate && npm run presentation:validate",
+    "check:fast": "oxfmt --check . && npm run lint && tsc && npm run simulator:validate && npm run model:validate && npm run presentation:validate && npm run interrupt:validate",
     "check": "npm run check:fast && npm run telemetry:validate && npm run investigation:validate"
   },
   "dependencies": {
