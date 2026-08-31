@@ -1,8 +1,22 @@
 # Cache Investigator
 
-Cache Investigator is an agent that investigates generated telemetry from a catalog service with a seeded cache regression. The agent can query the dataset but has no access to the planted cause. Each run is isolated and persists across browser disconnects.
+Cache Investigator is an agent that investigates generated telemetry from a catalog service with a seeded cache regression. It can query the evidence but cannot see the planted cause. Each investigation can be followed live, stays available as a finished report, and gets compressed into a Slack message.
 
-I initially considered investigating a queue failure in a media-processing service. But the cause could be exposed by a single configuration change, making the investigation too straightforward. A cache regression offered a richer problem: several signals change together, and the agent has to connect them before it can explain what happened.
+When someone starts an investigation, the model works in a bounded loop that decides what to check next. It can query metrics, logs, deployments and dependencies. The page shows these steps as they happen and saves progress so the investigation continues if the browser closes. The same route becomes the finished report when the run ends, and a Slack message is sent.
+
+## Design decisions
+
+I first tried a queue failure in a media-processing service. But the investigations were too quick. So I switched to a cache regression because it offered several signals change together, and the agent has to connect them before it can explain what happened.
+
+I used a familiar structure like Linear, something engineers already know how to navigate. Like treating investigations as issues.
+
+For an information-dense surface like the finished investigation, I went with a scroll to read first and then click to dig in, progressive disclosure pattern. The easy scrolling tells the big picture, conclusions, recommendations, impact and signals. Clicking lets you inspect individual claims and their evidence more closely. Each kind of information got its own visual treatment so it stays easy to scan and digest.
+
+For the live view, time was constrained, so I focused on making the flow work and having clear states. Like what the agent is doing, work completed, whether it is waiting, failed, finished, etc. I traded visual and interaction design, and polish, for clear and reliable use. The screen is more generic than I wanted but the flow should work across every state.
+
+A few of the design explorations I did for the index and finished view [Paper scratchpad](https://app.paper.design/file/01K4QW3RP4YWQJ9M64RTFCPBN6/01K4QW3RP4423XVE8ZJ1ND6KX3).
+
+I spent more time than I wanted on the backend. With more time, I would focus on the product's overall visual and interaction design, especially on the live view. Like visually nicer live states or better tool transitions and motion. Also, improve UX flaws like starting the investigation from the index. If I were to go deeper, I would spend more time getting familiar with the data so I could design better representations and visual hierarchies.
 
 ## Try the live investigation
 
